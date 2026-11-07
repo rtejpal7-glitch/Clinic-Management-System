@@ -1,0 +1,89 @@
+erDiagram
+  USERS ||--o{ USER_ROLES : has
+  ROLES ||--o{ USER_ROLES : grants
+  ROLES ||--o{ ROLE_PERMISSIONS : includes
+  PERMISSIONS ||--o{ ROLE_PERMISSIONS : "granted via"
+  USERS ||--o{ USER_SESSIONS : opens
+  USERS ||--o| DOCTORS : "has profile"
+  DOCTORS ||--o{ DOCTOR_SCHEDULES : works
+  PATIENTS ||--o{ PATIENT_IDENTIFIERS : "ABHA links"
+  PATIENTS ||--o{ PATIENT_CHANGE_HISTORY : "changes"
+  PATIENTS ||--o{ PATIENT_ALLERGIES : has
+  PATIENTS ||--o{ APPOINTMENTS : books
+  DOCTORS ||--o{ APPOINTMENTS : attends
+  APPOINTMENTS ||--o{ APPOINTMENT_STATUS_HISTORY : tracks
+  APPOINTMENTS ||--o| QUEUE_TOKENS : "issued at check-in"
+  APPOINTMENTS ||--o| CONSULTATIONS : "results in"
+  APPOINTMENTS |o--o{ APPOINTMENTS : "follow-up of"
+  PATIENTS ||--o{ CONSULTATIONS : "seen in"
+  DOCTORS ||--o{ CONSULTATIONS : documents
+  CONSULTATIONS ||--o| VITAL_SIGNS : records
+  CONSULTATIONS ||--o{ CONSULTATION_DIAGNOSES : codes
+  CONSULTATIONS ||--o{ CONSULTATION_ADDENDA : corrects
+  CONSULTATIONS ||--|| PRESCRIPTIONS : has
+  PRESCRIPTIONS ||--o{ PRESCRIPTION_ITEMS : lists
+  MEDICATION_CATALOGUE |o--o{ PRESCRIPTION_ITEMS : "selected from"
+  CONSULTATIONS ||--o{ INVESTIGATION_ORDERS : orders
+  INVESTIGATION_CATALOGUE |o--o{ INVESTIGATION_ORDERS : "selected from"
+  PATIENTS ||--o{ BILLS : billed
+  APPOINTMENTS |o--o{ BILLS : "references"
+  CONSULTATIONS |o--o{ BILLS : "references"
+  BILLS ||--o{ BILL_ITEMS : contains
+  SERVICE_CATALOGUE |o--o{ BILL_ITEMS : "priced from"
+  BILLS ||--o{ PAYMENTS : "paid / refunded by"
+  PATIENTS ||--o{ PATIENT_CONSENT_RECORDS : consents
+  PATIENTS ||--o{ ABDM_TRANSACTIONS : "interop log"
+  PATIENT_CONSENT_RECORDS |o--o{ ABDM_TRANSACTIONS : "used by"
+  PATIENT_IDENTIFIERS |o--o{ ABDM_TRANSACTIONS : "verified by"
+  CONSULTATIONS ||--o| ABDM_CARE_CONTEXTS : "shared as"
+
+  PATIENTS {
+    uuid id PK "immutable internal id"
+    text patient_number UK "CF-2026-000123, immutable"
+    text full_name
+    date date_of_birth
+    text gender
+    text mobile "indexed, not unique"
+    int version "optimistic lock"
+  }
+  PATIENT_IDENTIFIERS {
+    uuid id PK
+    uuid patient_id FK
+    text id_type "ABHA_NUMBER | ABHA_ADDRESS"
+    text value_ciphertext "AES-256-GCM"
+    text value_hmac "blind index, unique when active"
+    text verification_status
+    bool is_mock
+  }
+  APPOINTMENTS {
+    uuid id PK
+    uuid patient_id FK
+    uuid doctor_id FK
+    text appointment_type
+    timestamptz start_at "EXCLUDE overlap per doctor"
+    timestamptz end_at
+    text status
+  }
+  CONSULTATIONS {
+    uuid id PK
+    uuid appointment_id FK,UK
+    text status "DRAFT | FINALIZED (locked by trigger)"
+    text chief_complaint
+    date follow_up_date
+  }
+  BILLS {
+    uuid id PK
+    text invoice_number UK
+    bigint total_paise "CHECK total = subtotal - discount + tax"
+    bigint paid_paise
+    text status
+  }
+  AUDIT_LOGS {
+    bigint id PK
+    timestamptz occurred_at
+    text action
+    text outcome
+    jsonb details
+    text prev_hash
+    text hash "SHA-256 chain"
+  }

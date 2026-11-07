@@ -1,0 +1,28 @@
+{
+  "name": "clinicflow-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ClinicFlow \u2014 Mini Clinic Management System (web client)",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node dev-server.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types tests/*.test.ts",
+    "test:e2e": "node e2e/run-e2e.mjs"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "esbuild": "^0.25.0",
+    "playwright": "^1.55.0",
+    "typescript": "^5.8.0"
+  },
+  "engines": {
+    "node": ">=22.6"
+  }
+}

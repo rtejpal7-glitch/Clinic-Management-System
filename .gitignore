@@ -1,0 +1,8 @@
+.env
+backend/build/
+frontend/node_modules/
+frontend/dist/
+frontend/e2e/screenshots/FAILED-*
+__pycache__/
+.pytest_cache/
+*.log

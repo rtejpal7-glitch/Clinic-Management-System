@@ -1,0 +1,34 @@
+sequenceDiagram
+  autonumber
+  actor R as Receptionist
+  participant UI as ClinicFlow UI
+  participant API as AbdmService
+  participant DB as PostgreSQL
+  participant GW as AbdmGateway (MOCK)
+  actor P as Patient
+
+  Note over R,P: ABHA linking (patient consent recorded at the counter)
+  R->>UI: Enter ABHA number + "patient agreed"
+  UI->>API: POST /patients/{id}/abha/verify-init
+  API->>DB: identifier PENDING (encrypted + HMAC), txn ABHA_VERIFY_INIT
+  API->>GW: initAbhaVerification(requestId)
+  GW-->>API: gatewayTxnId (mock: no OTP actually sent)
+  P-->>R: tells OTP
+  R->>UI: Enter OTP
+  UI->>API: POST /abdm/transactions/{txn}/verify-confirm
+  API->>GW: confirmAbhaVerification
+  GW-->>API: ok / OTP_MISMATCH / timeout
+  API->>DB: identifier VERIFIED (is_mock=true), audit ABHA_LINK_CONFIRM
+
+  Note over R,P: Consent → share a finalized OPD consultation
+  R->>UI: Request consent (purpose, HI types, date range, expiry)
+  UI->>API: POST /patients/{id}/consents
+  API->>GW: requestConsent
+  GW-->>API: consentRequestRef (or retryable failure → RETRY_SCHEDULED)
+  P-->>GW: approves in PHR app (mock: "Simulate grant")
+  API->>DB: consent GRANTED + artefact ref
+  UI->>API: POST /consultations/{id}/abdm-share
+  API->>API: build FHIR document Bundle + local validation
+  API->>GW: pushHealthInformation(consent artefact, bundle)
+  GW-->>API: acknowledged (mock: NOT transmitted)
+  API->>DB: txn HI_SHARE SUCCESS, care context LINKED, audit HI_SHARE
