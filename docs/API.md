@@ -6,17 +6,11 @@ Base path `/api/v1`. All endpoints except `POST /auth/login` and `GET /health` n
 
 - JSON in and out (`application/fhir+json` for FHIR endpoints). Money is in **integer paise**. Timestamps are RFC 3339 UTC (`2026-11-07T15:11:55.123Z`). Dates are `YYYY-MM-DD` in the clinic timezone.
 - Errors use one envelope: `{"error": {"status": 409, "code": "SLOT_UNAVAILABLE", "message": "…", "fields": {"field": "message"}, "data": {…}}}`.
-- Common codes: `VALIDATION_ERROR` (400), `UNAUTHENTICATED` / `SESSION_INVALID` / `INVALID_CREDENTIALS` (401), `FORBIDDEN` / `PASSWORD_CHANGE_REQUIRED` (403), `NOT_FOUND` (404), `POSSIBLE_DUPLICATE`, `SLOT_UNAVAILABLE`, `STALE_VERSION`, `RECORD_LOCKED`, `INVALID_STATE`, `ALREADY_BILLED` (409), `PAYLOAD_TOO_LARGE` (413), `SLOT_OUTSIDE_SCHEDULE`, `ABHA_NOT_LINKED`, `NO_ACTIVE_CONSENT` (422), `ACCOUNT_LOCKED` (423).
+- Common codes: `VALIDATION_ERROR` (400), `UNAUTHENTICATED` / `SESSION_INVALID` / `INVALID_CREDENTIALS` (401), `FORBIDDEN` / `PASSWORD_CHANGE_REQUIRED` (403), `NOT_FOUND` (404), `POSSIBLE_DUPLICATE`, `SLOT_UNAVAILABLE`, `STALE_VERSION`, `RECORD_LOCKED`, `INVALID_STATE`, `ALREADY_BILLED` (409), `PAYLOAD_TOO_LARGE` (413), `SLOT_OUTSIDE_SCHEDULE`, `ABHA_NOT_LINKED`, `NO_ACTIVE_CONSENT` (422), `ACCOUNT_LOCKED` (423). v0.2 adds `SAFETY_ACKNOWLEDGEMENT_REQUIRED` (409, alerts in `data.alerts`; resend finalize with `safetyOverrideReason`), `SHARED_ROLE` / `INSTALLATION_SETTING` (403), `CLINIC_CODE_TAKEN`, `PHOTO_LIMIT` (409).
 - Updates that can conflict take a `version` (optimistic locking).
 
-## Endpoints (84 operations)
+## Endpoints (107 operations)
 
-
-### System
-
-| Method | Path | Description |
-|---|---|---|
-| GET | `/health` | Liveness / readiness probe |
 
 ### Auth
 
@@ -26,6 +20,18 @@ Base path `/api/v1`. All endpoints except `POST /auth/login` and `GET /health` n
 | POST | `/auth/login` | Sign in with username and password; returns a bearer token |
 | POST | `/auth/logout` | Sign out (revokes the current session) |
 | GET | `/auth/me` | Current user, roles and effective permissions |
+
+### System
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/health` | Liveness / readiness probe |
+
+### Dashboard
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/dashboard/summary` | Operational dashboard metrics (financial figures only with billing permissions) |
 
 ### Users & Roles
 
@@ -47,11 +53,59 @@ Base path `/api/v1`. All endpoints except `POST /auth/login` and `GET /health` n
 | GET | `/settings` | Clinic configuration |
 | PUT | `/settings` | Update clinic configuration |
 
-### Dashboard
+### Audit
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/dashboard/summary` | Operational dashboard metrics (financial figures only with billing permissions) |
+| GET | `/audit-logs` | Search audit log (filters: from, to, userId, action, entityType, entityId, patientId, outcome, page, size) |
+| GET | `/audit-logs/verify` | Verify the audit hash chain (tamper evidence) |
+
+### Clinics
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/facilities` | Clinics on this installation (platform admin: all; others: own clinic) |
+| POST | `/facilities` | Create a clinic with its first administrator (platform administrators only) |
+| GET | `/facilities/current` | The signed-in user's clinic |
+| PUT | `/facilities/current/network` | Join or leave the de-identified ClinicFlow prescribing network (requires an agreement reference) |
+
+### Dermatology
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/consultations/{id}/derm` | Dermatology assessment of a consultation |
+| PUT | `/consultations/{id}/derm` | Save the dermatology assessment (draft consultations, treating doctor) |
+| GET | `/consultations/{id}/photos` | Clinical photographs of a consultation (metadata) |
+| POST | `/consultations/{id}/photos` | Add a clinical photograph (consent required; JPEG/PNG/WebP, max 6 MB, encrypted at rest) |
+| GET | `/derm/vocabulary` | Dermatology coded vocabulary (problem types, lesions, sites, ...) |
+| POST | `/photos/{id}/entered-in-error` | Mark a photograph entered-in-error (never deleted) |
+| GET | `/photos/{id}/image` | Image bytes of a clinical photograph (every view is audited) |
+
+### Decision support
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/consultations/{id}/cds/clinical` | Panel A - clinical knowledge: possible conditions, questions, red flags, guideline options |
+| POST | `/consultations/{id}/cds/my-patterns` | Panel B - the doctor's own prescribing in comparable previous cases |
+| POST | `/consultations/{id}/cds/network` | Panel C - de-identified prescribing patterns across participating ClinicFlow clinics |
+| GET | `/consultations/{id}/decisions` | Suggestions shown vs final prescription, safety overrides and outcomes |
+| POST | `/consultations/{id}/outcome` | Record a follow-up treatment outcome (RESOLVED / IMPROVED / UNCHANGED / WORSENED) |
+| POST | `/consultations/{id}/safety-check` | Safety check of the saved draft prescription (allergy, pregnancy, age, duplicates, interactions) |
+
+### Analytics
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/analytics/doctor` | The signed-in doctor's dashboard and own prescribing analytics |
+| GET | `/analytics/network` | De-identified network coverage by diagnosis (thresholds applied) |
+
+### Clinical content
+
+| Method | Path | Description |
+|---|---|---|
+| PUT | `/catalogue/medications/{id}/clinical` | Edit a medicine's clinical information (returns it to UNREVIEWED) |
+| GET | `/cds/content` | Clinical decision-support content and medicine safety data with review status |
+| POST | `/cds/content/{type}/{id}/review` | Approve, retire or reopen a content item (clinical reviewers only) |
 
 ### Patients
 
@@ -68,6 +122,7 @@ Base path `/api/v1`. All endpoints except `POST /auth/login` and `GET /health` n
 | GET | `/patients/{id}/appointments` | Appointment history for a patient |
 | GET | `/patients/{id}/bills` | Billing history for a patient |
 | GET | `/patients/{id}/history` | Demographic change history |
+| PUT | `/patients/{id}/network-opt-out` | Record the patient's choice about network use of de-identified data |
 | GET | `/patients/{id}/timeline` | Clinical history: consultations, diagnoses, medicines, orders, vitals (newest first) |
 
 ### Doctors & Schedules
@@ -162,11 +217,4 @@ Base path `/api/v1`. All endpoints except `POST /auth/login` and `GET /health` n
 | Method | Path | Description |
 |---|---|---|
 | GET | `/fhir/Bundle/{id}/validate` | Local structural validation of the consultation FHIR bundle |
-| GET | `/fhir/{type}/{id}` | Export a record as FHIR R4 JSON. type: Patient / Practitioner / Organization / Appointment / Encounter / Invoice / Bundle (consultation document) |
-
-### Audit
-
-| Method | Path | Description |
-|---|---|---|
-| GET | `/audit-logs` | Search audit log (filters: from, to, userId, action, entityType, entityId, patientId, outcome, page, size) |
-| GET | `/audit-logs/verify` | Verify the audit hash chain (tamper evidence) |
+| GET | `/fhir/{type}/{id}` | Export a record as FHIR R4 JSON. type: Patient | Practitioner | Organization | Appointment | Encounter | Invoice | Bundle (consultation document) |

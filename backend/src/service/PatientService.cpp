@@ -42,6 +42,7 @@ oatpp::Object<dto::PatientDto> patientFromRow(const Row& r) {
   p->preferredLanguage = r.s("preferred_language");
   p->isActive = r.b("is_active");
   p->abhaLinked = r.b("abha_linked");
+  p->networkOptOut = r.b("network_opt_out");
   p->version = r.i32("version");
   p->createdAt = r.ts("created_at");
   p->updatedAt = r.ts("updated_at");

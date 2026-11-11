@@ -17,12 +17,14 @@ This document lists the security controls in the PoC, where they live in the cod
 
 ## Authorization (RBAC)
 
-- 29 permissions grouped by module (`V007__reference_data.sql`). System roles ADMIN, DOCTOR and RECEPTIONIST. Custom roles can be created and mapped in the UI.
+- 36 permissions grouped by module (`V007`, `V009`, `V010`). System roles ADMIN, DOCTOR, RECEPTIONIST, CLINICAL_REVIEWER (approves decision-support content; no patient access) and PLATFORM_ADMIN (creates clinics, edits shared system roles). Custom roles can be created and mapped in the UI.
 - **Deny by default:** every protected endpoint calls `auth(request, <permission>)` and the backend rejects anything not explicitly granted. Hiding buttons in the UI is a convenience only.
 - **Least privilege by role:** administrators have no clinical permissions. Receptionists can't read clinical notes, allergies or audit logs. Doctors can't see billing or financial dashboard figures. Refunds and cancellations need a separate `billing.refund` permission.
 - **Ownership rules:** only the treating doctor can edit or finalize their draft. Other doctors can read for continuity of care.
 - **Lock-out protection:** the system refuses role or user changes that would leave no active user with `user.manage`.
 - Every denial is written to the audit log (`ACCESS_DENIED`).
+- **Clinic isolation (v0.2):** PostgreSQL row-level security on every patient, clinical, financial and ABDM table. The clinic is taken from the authenticated user, never from the request. Users, roles and audit entries are filtered by clinic in code. Clinic administrators cannot grant the platform role or change shared system roles. A database session with no clinic context sees zero patient rows (verified manually, see TESTING.md).
+- **Decision support:** panels are available only to the treating doctor (`cds.use`; network also needs `network.read`). Content approval needs `cds.review`. Photographs need `photo.read` / `photo.write`.
 
 ## Audit logging
 
@@ -61,6 +63,8 @@ This document lists the security controls in the PoC, where they live in the cod
 
 - ABHA linking requires explicit confirmation that the patient agreed. The confirmation is recorded in the audit details.
 - ABDM consent records hold purpose, health-information types, date range, expiry and status. Expiry is enforced by the background worker, and revocation by staff is supported. Sharing is refused without an active, matching consent.
+- **Clinical photographs:** consent checkbox and scope are required and stored; images are encrypted (AES-256-GCM), checked by content type (magic bytes) and size, served with `no-store`, every view audited, never deleted.
+- **Network (secondary use):** off by default. A clinic joins only with a recorded agreement reference. Records are de-identified at capture: no direct identifiers or free text, keyed pseudonyms, month-level dates, coarse age bands. Patients can opt out, which withdraws their contributed records. A clinic that leaves has its records withdrawn. Aggregates are suppressed below 10 cases, 3 doctors or 2 clinics, or when one clinic contributes over 70% of cases; small cells are grouped. These are technical controls; the clinic still needs its own legal basis, notice and agreement under the DPDP Act, 2023 and its rules.
 - A clinic deploying ClinicFlow is the data fiduciary. It needs a privacy notice, a grievance contact and a documented process for data-principal requests. The PoC doesn't implement a patient-facing portal for these.
 
 ## Not yet implemented (production checklist)

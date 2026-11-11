@@ -59,6 +59,7 @@ class PatientDto : public oatpp::DTO {
   DTO_FIELD(String, preferredLanguage);
   DTO_FIELD(Boolean, isActive);
   DTO_FIELD(Boolean, abhaLinked);
+  DTO_FIELD(Boolean, networkOptOut);  // patient opted out of de-identified network use
   DTO_FIELD(Int32, version);
   DTO_FIELD(String, createdAt);
   DTO_FIELD(String, updatedAt);

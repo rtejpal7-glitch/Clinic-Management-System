@@ -35,6 +35,7 @@ export function DashboardPage() {
         subtitle={`${weekdayName(todayIST(), "long")}, ${dateOnly(todayIST())}`}
         actions={
           <>
+            {can("insights.read") && user?.doctorId && <Button onClick={() => navigate("/insights")}>My practice insights</Button>}
             {can("patient.create") && <Button onClick={() => navigate("/patients/new")}><IconUserPlus /> Register patient</Button>}
             {can("appointment.manage") && <Button variant="primary" onClick={() => navigate("/appointments?book=1")}><IconPlus /> Book appointment</Button>}
           </>

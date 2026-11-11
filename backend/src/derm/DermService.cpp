@@ -817,7 +817,8 @@ void DermService::beforeFinalize(Conn& c, const AuthContext& ctx, const std::str
 
 void DermService::afterFinalize(Conn& c, const AuthContext& ctx, const std::string& id) {
   auto cc = loadConsult(c, id);
-  if (cc.specialty != "DERMATOLOGY") return;
+  // Only consultations with a recorded dermatology assessment become pattern cases.
+  if (cc.specialty != "DERMATOLOGY" || !cc.hasAssessment) return;
   auto facts = factsFor(c, cc);
 
   // Final prescription (coded)
@@ -871,8 +872,9 @@ void DermService::afterFinalize(Conn& c, const AuthContext& ctx, const std::stri
                      {"durationDays", f.days ? json(*f.days) : json(nullptr)}};
         break;
       }
-      c.exec("INSERT INTO suggestion_decisions (consultation_id, snapshot_id, source, generic_code, decision, suggested, final_item, decided_by) "
-             "VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8)",
+      c.exec("INSERT INTO suggestion_decisions (consultation_id, snapshot_id, source, generic_code, medicine_name, decision, suggested, final_item, decided_by) "
+             "VALUES ($1,$2,$3,$4,(SELECT generic_name FROM medication_catalogue WHERE generic_code = $4 ORDER BY (brand_name IS NULL) DESC LIMIT 1),"
+             "  $5,$6::jsonb,$7::jsonb,$8)",
              Params(id, snapId, std::string(src), g, decision, sug.dump(), finalItem.is_null() ? std::optional<std::string>() : std::optional<std::string>(finalItem.dump()),
                     ctx.userId));
     }

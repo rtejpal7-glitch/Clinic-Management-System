@@ -30,6 +30,8 @@ ClinicFlow is a **modular monolith**: one C++ API process and one PostgreSQL dat
 | Billing | service_catalogue, bills, bill_items, payments | audit (references patients/appointments by id only) |
 | ABDM interop | patient_identifiers, patient_consent_records, abdm_transactions, abdm_care_contexts | audit, crypto, clinical (read), FHIR |
 | Audit | audit_logs | — |
+| Facilities (v0.2) | facilities | audit; sets the per-request clinic context used by row-level security |
+| Dermatology (v0.2) | derm_assessments, clinical_photos, cds_*, suggestion_*, safety_overrides, prescribing_cases, treatment_outcomes, network_case_records, medication_interactions | clinical (as a `ConsultationExtension` called inside the finalize transaction), crypto (photo encryption, HMAC pseudonyms), audit. Pure logic in `derm/CdsEngine`, `derm/MedicationSafety`, `derm/PatternStats` |
 
 ## Key design decisions
 
@@ -57,3 +59,12 @@ ClinicFlow is a **modular monolith**: one C++ API process and one PostgreSQL dat
 - **Horizontal API scaling:** the API is stateless apart from the database, so more instances can run behind a load balancer. The background worker uses `FOR UPDATE SKIP LOCKED` for notifications and should run as a single designated instance (or move to a job queue) for ABDM retries.
 - **Multi-clinic:** add a `facility_id` to the clinical and financial tables plus row-level security.
 - **Service extraction:** billing and ABDM interop are the natural first candidates. They already reference other modules by id only.
+
+## Dermatology extension (v0.2)
+
+- **Pure logic, thin services.** Matching, safety rules and pattern statistics are side-effect-free C++ functions with unit tests. `DermService` only loads data, calls them, and stores snapshots.
+- **Extension point.** `ClinicalService::finalize` calls every registered `ConsultationExtension` inside its transaction. `beforeFinalize` can block finalization (safety acknowledgement). `afterFinalize` captures the coded case and the decisions atomically with the lock. A future specialty adds its own extension and frontend module, keyed by `consultations.specialty_code`.
+- **Content is data.** Conditions, findings, red flags, medicine rules and interactions are database rows with a review status. Only `APPROVED` rows reach the engine. Starter content is generated from a Python data file into a migration.
+- **Three panels, three sources.** A reads the knowledge base. B reads the doctor's own `prescribing_cases`. C reads `network_case_records`. They are fetched independently, shown side by side, and never merged into one recommendation.
+
+See [DERMATOLOGY.md](DERMATOLOGY.md).

@@ -9,8 +9,12 @@ import {
   Banner, Button, Combo, ErrorBanner, Loading, MockFlag, Modal, StatusBadge, Tabs, TextArea, TextField, useAsync, useToast,
 } from "../components/ui";
 import { IconAlert, IconLock, IconPrinter, IconTrash } from "../components/icons";
+import { DermAssessmentTab } from "./derm/DermAssessment";
+import { DecisionPanels } from "./derm/DecisionPanels";
+import { DecisionRecordPanel, SafetyOverrideModal, SafetyPanel } from "./derm/SafetyAndOutcome";
+import { SOURCE_LABEL, type SafetyAlert } from "../lib/derm";
 
-type Tab = "notes" | "rx" | "previous";
+type Tab = "notes" | "derm" | "cds" | "rx" | "previous" | "record";
 /** Sensible starting dose by dosage form; the doctor always reviews it. */
 function defaultDose(form: string): string {
   const f = form.toUpperCase();
@@ -27,7 +31,7 @@ const FREQUENCIES = ["1-0-0", "0-0-1", "1-0-1", "1-1-1", "0-1-0", "1-1-1-1", "SO
 const ROUTES = ["ORAL", "TOPICAL", "INHALATION", "OPHTHALMIC", "OTIC", "NASAL", "SUBLINGUAL", "INTRAMUSCULAR", "INTRAVENOUS", "SUBCUTANEOUS", "RECTAL", "VAGINAL"];
 
 export function ConsultationPage({ id }: { id: string }) {
-  const { can } = useAuth();
+  const { can, user } = useAuth();
   const toast = useToast();
   const res = useAsync(() => api.get<Consultation>(`/consultations/${id}`), [id]);
   const [c, setC] = useState<Consultation | null>(null);
@@ -39,6 +43,8 @@ export function ConsultationPage({ id }: { id: string }) {
   const [confirmFinal, setConfirmFinal] = useState(false);
   const [addendum, setAddendum] = useState(false);
   const [fhir, setFhir] = useState<unknown>(null);
+  const [overrideAlerts, setOverrideAlerts] = useState<SafetyAlert[] | null>(null);
+  const [safetyKey, setSafetyKey] = useState(0);
 
   useEffect(() => { if (res.data) { setC(res.data); setDirty(false); } }, [res.data]);
   useEffect(() => {
@@ -54,6 +60,7 @@ export function ConsultationPage({ id }: { id: string }) {
   if (res.error) return <ErrorBanner error={res.error} />;
   if (!c) return null;
   const editable = c.canEdit;
+  const isDerm = c.specialtyCode === "DERMATOLOGY" || (c.status === "DRAFT" && user?.specialty === "DERMATOLOGY");
   const activeAllergies = (allergies.data ?? []).filter((a) => a.status === "ACTIVE");
 
   const update = (patch: Partial<Consultation>) => { setC({ ...c, ...patch }); setDirty(true); };
@@ -75,6 +82,7 @@ export function ConsultationPage({ id }: { id: string }) {
       });
       setC({ ...saved, version: Math.max(saved.version, notes.version) });
       setDirty(false);
+      setSafetyKey((k) => k + 1);
       if (!quiet) toast("Draft saved");
       return saved;
     } catch (e) {
@@ -86,18 +94,27 @@ export function ConsultationPage({ id }: { id: string }) {
     } finally { setBusy(false); }
   };
 
-  const finalize = async () => {
+  const finalize = async (safetyOverrideReason?: string) => {
     const saved = await save(true);
     if (!saved) { setConfirmFinal(false); return; }
     try {
-      const f = await api.post<Consultation>(`/consultations/${c.id}/finalize`);
-      setC(f); setConfirmFinal(false);
+      const f = await api.post<Consultation>(`/consultations/${c.id}/finalize`, safetyOverrideReason ? { safetyOverrideReason } : {});
+      setC(f); setConfirmFinal(false); setOverrideAlerts(null);
       toast("Consultation finalized and locked");
     } catch (e) {
       const err = e as ApiError;
-      setApiErr(err); setErrors(err.fields); setConfirmFinal(false); setTab("notes");
+      setConfirmFinal(false);
+      if (err.code === "SAFETY_ACKNOWLEDGEMENT_REQUIRED") { setOverrideAlerts(err.data?.alerts ?? []); return; }
+      setApiErr(err); setErrors(err.fields); setTab("notes");
     }
   };
+  // Decision-support panels read the saved draft, so unsaved edits are saved first.
+  const ensureSaved = async () => (dirty ? !!(await save(true)) : true);
+  const addFromPanel = (item: RxItem) => {
+    updateRx({ items: [...c.prescription.items, item] });
+    toast(`${item.medicineName} added to the prescription. Review dose, frequency and duration.`);
+  };
+  const rxGenerics = new Set(c.prescription.items.map((i) => i.genericCode).filter(Boolean) as string[]);
 
   const share = async () => {
     try {
@@ -148,12 +165,26 @@ export function ConsultationPage({ id }: { id: string }) {
       )}
       {!editable && c.status === "DRAFT" && <Banner kind="info">This draft belongs to {c.doctorName}. You can read it but only the treating doctor can edit.</Banner>}
 
-      <Tabs tabs={[{ id: "notes", label: "Notes, vitals & diagnosis" }, { id: "rx", label: `Prescription & orders (${c.prescription.items.length + c.prescription.investigations.length})` }, { id: "previous", label: "Previous visits" }]}
-        value={tab} onChange={setTab} />
+      <Tabs tabs={[
+        { id: "notes" as Tab, label: "Notes, vitals & diagnosis" },
+        ...(isDerm ? [{ id: "derm" as Tab, label: "Dermatology assessment" }] : []),
+        ...(isDerm && editable && can("cds.use") ? [{ id: "cds" as Tab, label: "Decision support (A · B · C)" }] : []),
+        { id: "rx" as Tab, label: `Prescription & orders (${c.prescription.items.length + c.prescription.investigations.length})` },
+        { id: "previous" as Tab, label: "Previous visits" },
+        ...(isDerm && c.status === "FINALIZED" ? [{ id: "record" as Tab, label: "Decisions & outcome" }] : []),
+      ]} value={tab} onChange={setTab} />
 
       {tab === "notes" && <NotesTab c={c} editable={editable} errors={errors} update={update} />}
-      {tab === "rx" && <RxTab c={c} editable={editable} errors={errors} updateRx={updateRx} allergies={activeAllergies} />}
+      {tab === "derm" && <DermAssessmentTab consultationId={c.id} editable={editable} patientSex={patient.data?.gender} />}
+      {tab === "cds" && (
+        <>
+          <RxSummary items={c.prescription.items} onOpen={() => setTab("rx")} dirty={dirty} />
+          <DecisionPanels consultationId={c.id} editable={editable} ensureSaved={ensureSaved} rxGenerics={rxGenerics} onAdd={addFromPanel} />
+        </>
+      )}
+      {tab === "rx" && <RxTab c={c} editable={editable} errors={errors} updateRx={updateRx} allergies={activeAllergies} safetyKey={safetyKey} />}
       {tab === "previous" && <PreviousVisits patientId={c.patientId} currentId={c.id} />}
+      {tab === "record" && <DecisionRecordPanel consultationId={c.id} />}
 
       {c.addenda.length > 0 && (
         <section style={{ marginTop: 20 }}>
@@ -171,7 +202,7 @@ export function ConsultationPage({ id }: { id: string }) {
 
       {confirmFinal && (
         <Modal title="Finalize consultation?" onClose={() => setConfirmFinal(false)}
-          footer={<><Button onClick={() => setConfirmFinal(false)}>Keep editing</Button><Button variant="primary" busy={busy} onClick={finalize}>Finalize and lock</Button></>}>
+          footer={<><Button onClick={() => setConfirmFinal(false)}>Keep editing</Button><Button variant="primary" busy={busy} onClick={() => finalize()}>Finalize and lock</Button></>}>
           <p>Finalizing locks the notes, diagnosis and prescription. Later corrections can only be added as addenda. The appointment will be marked completed.</p>
           <ul className="small">
             <li>Chief complaint: {c.chiefComplaint ? "recorded" : <strong style={{ color: "var(--red)" }}>missing</strong>}</li>
@@ -180,6 +211,7 @@ export function ConsultationPage({ id }: { id: string }) {
           </ul>
         </Modal>
       )}
+      {overrideAlerts && <SafetyOverrideModal alerts={overrideAlerts} busy={busy} onCancel={() => { setOverrideAlerts(null); setTab("rx"); }} onConfirm={(r) => finalize(r)} />}
       {addendum && <AddendumModal id={c.id} onClose={() => setAddendum(false)} onSaved={(nc) => { setC(nc); setAddendum(false); }} />}
       {fhir !== null && (
         <Modal title="FHIR R4 document bundle" wide onClose={() => setFhir(null)}>
@@ -282,8 +314,8 @@ function DiagnosisEditor({ value, onChange, editable }: { value: Diagnosis[]; on
   );
 }
 
-function RxTab({ c, editable, errors, updateRx, allergies }: {
-  c: Consultation; editable: boolean; errors: Record<string, string>; updateRx: (p: Partial<Consultation["prescription"]>) => void; allergies: Allergy[];
+function RxTab({ c, editable, errors, updateRx, allergies, safetyKey }: {
+  c: Consultation; editable: boolean; errors: Record<string, string>; updateRx: (p: Partial<Consultation["prescription"]>) => void; allergies: Allergy[]; safetyKey: number;
 }) {
   const items = c.prescription.items;
   const setItem = (i: number, patch: Partial<RxItem>) => updateRx({ items: items.map((it, j) => (j === i ? { ...it, ...patch } : it)) });
@@ -294,8 +326,8 @@ function RxTab({ c, editable, errors, updateRx, allergies }: {
   }, [items, allergies]);
   return (
     <div className="stack">
-      <Banner kind="info">ClinicFlow does not perform automated drug-interaction, dose or allergy checking. Review the patient's allergies and current medications before prescribing.</Banner>
-      {allergyHit.length > 0 && <Banner kind="warn">Name match with a recorded allergy: {allergyHit.map((i) => i.medicineName).join(", ")}. This is a simple text match, not a clinical check.</Banner>}
+      {c.status === "DRAFT" ? <SafetyPanel consultationId={c.id} refreshKey={safetyKey} /> : null}
+      {allergyHit.length > 0 && <Banner kind="warn">Unsaved items match a recorded allergy by name: {allergyHit.map((i) => i.medicineName).join(", ")}. Save the draft to run the full safety check.</Banner>}
       <div className="panel">
         <div className="panel-head"><h3><span style={{ fontFamily: "Georgia, serif", color: "var(--blue)", fontSize: "1.2rem" }}>℞</span> Medicines</h3></div>
         <div className="panel-body">
@@ -304,7 +336,8 @@ function RxTab({ c, editable, errors, updateRx, allergies }: {
           )}
           {items.map((it, i) => (
             <div className="rx-row" key={i}>
-              <div><strong>{it.medicineName}</strong><div className="cell-sub">{[it.strength, it.dosageForm && humanize(it.dosageForm)].filter(Boolean).join(", ")}</div></div>
+              <div><strong>{it.medicineName}</strong><div className="cell-sub">{[it.strength, it.dosageForm && humanize(it.dosageForm)].filter(Boolean).join(", ")}</div>
+                {it.sourceKind && it.sourceKind !== "MANUAL" && <SourceTag it={it} />}</div>
               <RxInput label="Dose" value={it.dose} onChange={(v) => setItem(i, { dose: v })} disabled={!editable} error={errors[`items[${i}].dose`]} />
               <select className="select" aria-label="Route" value={it.route} disabled={!editable} onChange={(e) => setItem(i, { route: e.target.value })}>{ROUTES.map((r) => <option key={r} value={r}>{humanize(r)}</option>)}</select>
               <div>
@@ -321,9 +354,10 @@ function RxTab({ c, editable, errors, updateRx, allergies }: {
           {editable && (
             <div style={{ marginTop: 12, maxWidth: 480 }}>
               <Combo<Medication> label="Add medicine" placeholder="Search the medicine catalogue" search={(q) => api.get("/catalogue/medications", { q })}
-                render={(m) => <><strong>{m.genericName}</strong> {m.strength} <span className="muted">{humanize(m.dosageForm)}</span></>}
-                onPick={(m) => updateRx({ items: [...items, { medicationId: m.id, medicineName: m.genericName, strength: m.strength, dosageForm: m.dosageForm,
-                  route: m.defaultRoute, dose: defaultDose(m.dosageForm), frequency: "1-0-1", durationDays: 5 }] })} />
+                render={(m) => <><strong>{m.brandName ? `${m.brandName} ` : ""}{m.brandName ? <span className="muted">({m.genericName})</span> : m.genericName}</strong> {m.strength} <span className="muted">{humanize(m.dosageForm)}</span>{m.highRisk ? <span className="badge b-red" style={{ marginLeft: 6 }}>High-alert</span> : null}</>}
+                onPick={(m) => updateRx({ items: [...items, { medicationId: m.id, medicineName: m.brandName ? `${m.brandName} (${m.genericName})` : m.genericName, strength: m.strength, dosageForm: m.dosageForm,
+                  route: m.defaultRoute, dose: m.defaultDose || defaultDose(m.dosageForm), frequency: m.defaultFrequency || "1-0-1", durationDays: m.defaultDurationDays ?? 5,
+                  genericCode: m.genericCode, sourceKind: "MANUAL" }] })} />
             </div>
           )}
         </div>
@@ -359,6 +393,30 @@ function RxTab({ c, editable, errors, updateRx, allergies }: {
         <TextArea label="Advice (non-medication instructions)" value={c.prescription.advice} onChange={(v) => updateRx({ advice: v })} disabled={!editable}
           placeholder="Diet, rest, fluids, warning signs to return early" rows={3} />
       </div></div>
+    </div>
+  );
+}
+
+function SourceTag({ it }: { it: RxItem }) {
+  const changed = (it.suggestedFrequency && it.suggestedFrequency !== it.frequency) || (it.suggestedDose && it.suggestedDose !== it.dose) ||
+    (it.suggestedDurationDays && it.suggestedDurationDays !== it.durationDays);
+  return (
+    <div className={`src-tag src-${(it.sourceKind ?? "").toLowerCase()}`}
+      title={it.suggestedFrequency || it.suggestedDose ? `Suggested: ${[it.suggestedDose, it.suggestedFrequency, it.suggestedDurationDays ? it.suggestedDurationDays + " d" : ""].filter(Boolean).join(", ")}` : undefined}>
+      From {SOURCE_LABEL[it.sourceKind ?? ""]}{changed ? " · modified" : ""}
+    </div>
+  );
+}
+
+function RxSummary({ items, onOpen, dirty }: { items: RxItem[]; onOpen: () => void; dirty: boolean }) {
+  return (
+    <div className="rx-summary">
+      <strong>Current prescription:</strong>
+      {items.length === 0 ? <span className="muted"> nothing yet</span> : items.map((i, k) => (
+        <span key={k} className="chip">{i.medicineName} {i.strength} · {i.dose} {i.frequency}{i.durationDays ? ` × ${i.durationDays} d` : ""}</span>
+      ))}
+      {dirty && <span className="small muted">(unsaved)</span>}
+      <Button size="sm" variant="ghost" onClick={onOpen}>Edit prescription</Button>
     </div>
   );
 }

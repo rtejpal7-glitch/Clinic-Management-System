@@ -78,7 +78,17 @@ async function request<T>(method: string, path: string, body?: unknown, params?:
   return json as T;
 }
 
+/** Authorised binary download (e.g. clinical photographs) returned as an object URL. */
+async function blobUrl(path: string): Promise<string> {
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`/api/v1${path}`, { headers });
+  if (!res.ok) throw new ApiError(res.status, "HTTP_" + res.status, `Could not load (${res.status})`);
+  return URL.createObjectURL(await res.blob());
+}
+
 export const api = {
+  blobUrl,
   get: <T>(path: string, params?: Record<string, unknown>) => request<T>("GET", path, undefined, params),
   post: <T>(path: string, body: unknown = {}) => request<T>("POST", path, body),
   put: <T>(path: string, body: unknown = {}) => request<T>("PUT", path, body),

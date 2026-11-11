@@ -2,12 +2,12 @@
 
 | Suite | Tool | Count | What it proves |
 |---|---|---|---|
-| Backend unit | C++ (self-contained runner, `ctest`) | 19 | Billing arithmetic, duplicate scoring, appointment state machine, AES-GCM encryption and tamper detection, Argon2id, password policy, ABHA normalization and masking, mock gateway behaviour, FHIR validator |
-| API integration | pytest + requests against a live server and PostgreSQL | 78 | End-to-end business rules, RBAC and security behaviour, DB constraints under concurrency, ABDM mock flows, FHIR output |
+| Backend unit | C++ (self-contained runner, `ctest`) | 28 | Billing arithmetic, duplicate scoring, appointment state machine, AES-GCM encryption and tamper detection, Argon2id, password policy, ABHA normalization and masking, mock gateway behaviour, FHIR validator; **v0.2:** CDS minimum-information rule, unapproved content never used, ranking with reasons and severity filtering, red flags with incomplete data, medication safety (pregnancy, allergy, age, duplicates, interactions, reviewed vs draft levels), own-pattern threshold, network disclosure controls (min cases/doctors/clinics, dominance, small cells) |
+| API integration | pytest + requests against a live server and PostgreSQL | 106 | End-to-end business rules, RBAC and security behaviour, DB constraints under concurrency, ABDM mock flows, FHIR output; **v0.2:** multi-clinic isolation (9), dermatology/CDS/intelligence (19) |
 | Frontend unit | `node --test` | 11 | Client validation mirrors server rules; money parsing and formatting; bill preview matches server math |
-| End-to-end UI | Playwright (Chromium) | 20 | The real UI driven as receptionist, doctor and admin, with a screenshot of every screen |
+| End-to-end UI | Playwright (Chromium) | 20 + 10 | The real UI driven as receptionist, doctor and admin (`run-e2e.mjs`), and the dermatology flow (`run-derm-e2e.mjs`: assessment, consented photo, three panels on one row, add/modify suggestion, safety check, finalize, decision record, outcome, insights, content review, clinic network, tablet layout) |
 
-All suites were run green on the delivered build: 19/19, 78/78 (three consecutive runs), 11/11 and 20/20.
+All suites were run green on the delivered v0.2 build against a freshly migrated database with both demo seeds: unit 28/28, API 106/106 (three consecutive runs), frontend 11/11, E2E 20/20 and 10/10, no browser console errors, audit chain valid.
 
 ## Running
 
@@ -27,6 +27,8 @@ python3 scripts/seed_demo.py
 cd frontend && npm run dev &            # http://localhost:5173
 npx playwright install chromium         # first time only
 E2E_BASE_URL=http://localhost:5173 npm run test:e2e   # screenshots in frontend/e2e/screenshots/
+python3 scripts/seed_derm_demo.py --approve-content-for-demo   # dermatology suite needs reviewer.demo
+E2E_BASE_URL=http://localhost:5173 npm run test:e2e:derm
 ```
 
 Tip: run the API tests against a separate database from your demo data. They create many synthetic users and patients.
@@ -42,6 +44,28 @@ Tip: run the API tests against a separate database from your demo data. They cre
 | Invoice / payments / partial payments / calculations | test_billing: invoice_generation_and_calculation, partial_then_full_payment, refund_requires_permission_and_reason, cancel_only_unpaid; unit billing_* |
 | Invalid logins / RBAC / unauthorized API / audit / sensitive access | test_security: invalid_login…, account_lockout…, unauthenticated_requests_are_rejected, denied_access_is_audited, login_events_are_audited, audit_log_hash_chain_verifies, patient_view_is_access_logged, dashboard_hides_financials_without_permission |
 | Mock ABHA linking / consent creation & withdrawal / mock success & failure / FHIR validation | test_abdm: mock_abha_linking_flow, wrong_otp_and_timeout_fail, consent_creation_denial_and_withdrawal, consent_request_gateway_failure_and_retry, mock_share_success_and_failure_with_retry, fhir_bundle_structure_and_validation |
+
+## Dermatology extension: coverage of the brief's test list (section 12)
+
+| Brief item | Tests |
+|---|---|
+| 1. Derm consultation form | api: test_dermatology::test_assessment_save_validate_and_lock; e2e-derm: structured assessment |
+| 2. Symptom analysis, insufficient data | unit: cds_requires_minimum_information, cds_ranks_with_reasons…; api: ::test_panel_a_insufficient_data, ::test_unreviewed_content_is_never_used, ::test_red_flag_for_breathing_difficulty |
+| 3. Panel A recommendations with references | api: ::test_unreviewed_content_is_never_used (references, reasoning, no auto-prescribing) |
+| 4. Panel B from real history | api: ::test_my_patterns_from_real_history_and_decision_tracking (fresh doctor = insufficient, 3 real cases = OK, other doctor blocked) |
+| 5. Panel C aggregation and privacy | api: ::test_network_patterns_thresholds_and_deidentification (withheld below threshold without counts; 12 cases / 4 doctors / 2 clinics shown; no identities; own cases excluded; leaving withdraws), ::test_network_requires_participation, ::test_patient_opt_out_excludes_from_network; unit: patterns_network_disclosure_controls |
+| 6. Three panels, one screen | e2e-derm: panels on one row; tablet layout |
+| 7. Finalization, accept/modify/reject tracking, audit | api: decision tracking test (MODIFIED / DOCTOR_ADDED / NOT_USED), ::test_allergy_blocks_finalize_until_override; e2e-derm: decisions & outcome |
+| 8. Catalogue | api: ::test_editing_medicine_information_resets_review, ::test_review_requires_reviewer_and_notes |
+| 9. Doctor dashboard and analytics | api: ::test_doctor_dashboard_analytics, ::test_network_analytics_hides_small_cohorts; e2e-derm: practice insights |
+| 10. Security, multi-clinic isolation, photo access | api: test_multiclinic (9), ::test_photo_consent_type_and_audit, ::test_receptionist_has_no_cds_or_photo_access, ::test_other_doctor_cannot_edit_or_use_cds |
+
+Manual database check of row-level security (no clinic context set):
+
+```sql
+-- connected as the application role, without app.facility_id
+SELECT count(*) FROM patients;          -- 0, although the demo database holds hundreds of patients
+```
 
 ## Defects found by testing (and fixed)
 
@@ -62,6 +86,9 @@ DELETE FROM payments;                                          -- ERROR: permiss
 -- Reminders queued for future bookings
 SELECT status, count(*) FROM notifications GROUP BY 1;
 ```
+
+6. (v0.2) A CSS class name clash made all new percentage bars render 36 px wide. Found from E2E screenshots; renamed.
+7. (v0.2) Decisions for suggestions that were not used had no medicine name. Found from E2E screenshots; the name is now resolved from the catalogue.
 
 ## Not yet covered
 

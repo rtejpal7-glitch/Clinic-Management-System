@@ -112,3 +112,16 @@ npm run dev        # http://localhost:5173, proxies /api to localhost:8000
 | `WORKER_INTERVAL_SECONDS` | `30` | Background worker cadence |
 
 Clinic-level settings (clinic profile, ID prefixes, idle timeout, duplicate-matching rules) live in the database and are edited under **Clinic settings** in the app.
+
+## Dermatology demo data (v0.2)
+
+```bash
+python3 scripts/seed_demo.py                                    # general demo (users, patients, visits, billing, mock ABDM)
+python3 scripts/seed_derm_demo.py [--cases-per-doctor 40] [--approve-content-for-demo]
+```
+
+`seed_derm_demo.py` creates two more demo clinics (Twachaa, Nirmal) with administrators, receptionists and two dermatologists each, plus two dermatologists in the primary clinic. All three clinics join the network under a fictitious `DEMO-DSA-…` reference. It then finalizes synthetic dermatology consultations with invented per-doctor prescribing habits and records outcomes for some of them. Three patients are left waiting for `dr.kavya`.
+
+Without `--approve-content-for-demo`, Panel A shows "No approved clinical content", which is the correct state for a new installation. The flag creates `reviewer.demo` and approves the starter content with a note saying it is **not a clinical review**. Never use it on a system used for patient care.
+
+The primary clinic is created as a DERMATOLOGY clinic by migration V009. Platform administrators can add clinics of type DERMATOLOGY or GENERAL under *Clinic & network*.

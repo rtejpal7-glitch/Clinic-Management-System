@@ -23,6 +23,9 @@ import { UsersPage } from "./pages/Users";
 import { AuditPage } from "./pages/Audit";
 import { SettingsPage } from "./pages/Settings";
 import { PatientSearchBox } from "./pages/PatientSearchBox";
+import { InsightsPage } from "./pages/Insights";
+import { ClinicalContentPage } from "./pages/ClinicalContent";
+import { ClinicsPage } from "./pages/Clinics";
 
 interface NavItem { to: string; label: string; icon: ReactNode; perm?: string; match: string[] }
 const NAV: { title: string; items: NavItem[] }[] = [
@@ -30,6 +33,7 @@ const NAV: { title: string; items: NavItem[] }[] = [
     { to: "/", label: "Dashboard", icon: <IconHome />, perm: "dashboard.read", match: [""] },
     { to: "/queue", label: "Waiting queue", icon: <IconQueue />, perm: "appointment.read", match: ["queue"] },
     { to: "/appointments", label: "Appointments", icon: <IconCalendar />, perm: "appointment.read", match: ["appointments"] },
+    { to: "/insights", label: "Practice insights", icon: <IconStethoscope />, perm: "insights.read", match: ["insights"] },
   ] },
   { title: "Patients", items: [
     { to: "/patients", label: "Patient directory", icon: <IconUsers />, perm: "patient.read", match: ["patients"] },
@@ -44,6 +48,8 @@ const NAV: { title: string; items: NavItem[] }[] = [
     { to: "/users", label: "Users & roles", icon: <IconShield />, perm: "user.manage", match: ["users"] },
     { to: "/audit", label: "Audit log", icon: <IconLog />, perm: "audit.read", match: ["audit"] },
     { to: "/settings", label: "Clinic settings", icon: <IconSettings />, perm: "settings.manage", match: ["settings"] },
+    { to: "/clinics", label: "Clinic & network", icon: <IconUsers />, perm: "settings.manage", match: ["clinics"] },
+    { to: "/clinical-content", label: "Clinical content", icon: <IconShield />, perm: "cds.review|catalogue.manage", match: ["clinical-content"] },
   ] },
 ];
 
@@ -84,7 +90,7 @@ function Shell() {
           </div>
         </div>
         {NAV.map((g) => {
-          const items = g.items.filter((i) => !i.perm || can(i.perm));
+          const items = g.items.filter((i) => !i.perm || i.perm.split("|").some((p) => can(p)));
           if (!items.length) return null;
           return (
             <nav className="nav-group" key={g.title} aria-label={g.title}>
@@ -157,5 +163,8 @@ function Routes({ path, query }: { path: string; query: URLSearchParams }) {
   if (path === "/users") return guard("user.manage", <UsersPage />);
   if (path === "/audit") return guard("audit.read", <AuditPage />);
   if (path === "/settings") return guard("settings.manage", <SettingsPage />);
+  if (path === "/insights") return can("insights.read") || can("network.read") ? <InsightsPage tab={query.get("tab") ?? undefined} /> : guard("insights.read", null);
+  if (path === "/clinics") return guard("settings.manage", <ClinicsPage />);
+  if (path === "/clinical-content") return can("cds.review") || can("catalogue.manage") ? <ClinicalContentPage /> : guard("cds.review", null);
   return <Empty title="Page not found"><a href="#/">Go to the dashboard</a></Empty>;
 }

@@ -9,6 +9,10 @@ export interface CurrentUser {
   doctorId?: string;
   mustChangePassword: boolean;
   sessionIdleMinutes: number;
+  facilityId?: string;
+  facilityCode?: string;
+  facilityName?: string;
+  specialty?: string;
 }
 
 export interface Patient {
@@ -35,6 +39,7 @@ export interface Patient {
   preferredLanguage?: string;
   isActive: boolean;
   abhaLinked: boolean;
+  networkOptOut?: boolean;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -155,6 +160,14 @@ export interface RxItem {
   durationDays?: number | null;
   quantity?: number | null;
   instructions?: string;
+  /** Set by the server from the catalogue. */
+  genericCode?: string;
+  /** MANUAL, or the decision-support panel the doctor explicitly added it from. */
+  sourceKind?: "MANUAL" | "CLINICAL" | "MY_PATTERNS" | "NETWORK";
+  sourceSnapshotId?: string;
+  suggestedDose?: string | null;
+  suggestedFrequency?: string | null;
+  suggestedDurationDays?: number | null;
 }
 
 export interface InvestigationOrder {
@@ -195,6 +208,7 @@ export interface Consultation {
   addenda: { id: string; authorName: string; reason: string; content: string; createdAt: string }[];
   prescription: { id?: string; status?: string; advice?: string; items: RxItem[]; investigations: InvestigationOrder[] };
   canEdit: boolean;
+  specialtyCode?: "GENERAL" | "DERMATOLOGY";
 }
 
 export interface TimelineEntry {
@@ -230,6 +244,13 @@ export interface Medication {
   defaultRoute: string;
   drugSchedule?: string;
   isActive: boolean;
+  genericCode?: string;
+  category?: string;
+  reviewStatus?: "UNREVIEWED" | "APPROVED" | "RETIRED";
+  highRisk?: boolean;
+  defaultDose?: string;
+  defaultFrequency?: string;
+  defaultDurationDays?: number;
 }
 
 export interface InvestigationItem {

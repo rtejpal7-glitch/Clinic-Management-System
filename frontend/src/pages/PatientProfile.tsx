@@ -60,7 +60,7 @@ export function PatientProfilePage({ id, tab }: { id: string; tab: string }) {
         }
       />
       <Tabs tabs={tabs} value={current} onChange={setTab} />
-      {current === "overview" && <Overview p={pt} />}
+      {current === "overview" && <Overview p={pt} onChanged={p.reload} />}
       {current === "history" && <History patientId={pt.id} />}
       {current === "appointments" && <AppointmentsTab patientId={pt.id} />}
       {current === "billing" && <BillingTab patientId={pt.id} />}
@@ -71,8 +71,15 @@ export function PatientProfilePage({ id, tab }: { id: string; tab: string }) {
   );
 }
 
-function Overview({ p }: { p: Patient }) {
+function Overview({ p, onChanged }: { p: Patient; onChanged: () => void }) {
   const { can } = useAuth();
+  const toast = useToast();
+  const toggleOptOut = async () => {
+    const next = !p.networkOptOut;
+    const r = await api.put<{ recordsWithdrawn: number }>(`/patients/${p.id}/network-opt-out`, { optOut: next });
+    toast(next ? `Opt-out recorded${r.recordsWithdrawn ? `; ${r.recordsWithdrawn} contributed record(s) withdrawn` : ""}` : "Opt-out removed");
+    onChanged();
+  };
   return (
     <div className="split">
       <div className="panel">
@@ -91,6 +98,9 @@ function Overview({ p }: { p: Patient }) {
             <dt>Preferred language</dt><dd>{p.preferredLanguage ?? "—"}</dd>
             <dt>ABHA</dt><dd>{p.abhaLinked ? <span className="badge b-green">Linked</span> : "Not linked"}</dd>
             <dt>Registered</dt><dd>{dateTime(p.createdAt)}</dd>
+            <dt>Network data use</dt><dd>{p.networkOptOut ? <span className="badge b-grey">Opted out</span> : "Not opted out"}
+              {can("patient.update") && <> <button className="btn btn-ghost btn-sm" onClick={toggleOptOut}>{p.networkOptOut ? "Remove opt-out" : "Record opt-out"}</button></>}
+              <div className="small muted">Whether de-identified data from this patient's dermatology visits may be used in ClinicFlow network statistics</div></dd>
           </dl>
         </div>
       </div>
