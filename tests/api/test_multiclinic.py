@@ -2,26 +2,7 @@
 PostgreSQL row-level security plus explicit scoping of users/roles/audit."""
 import pytest
 
-from conftest import PASSWORD, Client, login, patient_payload, rid, create_user
-
-
-@pytest.fixture(scope="session")
-def clinic_b(admin):
-    """A second clinic with its own administrator (created by the platform admin)."""
-    code = "T" + rid(5).upper()
-    temp = "Temp-Pass-" + rid(8) + "1"
-    username = f"badmin_{rid()}"
-    r = admin.post("/facilities", {"code": code, "name": f"Test Skin Clinic {code}", "specialty": "DERMATOLOGY",
-                                   "city": "Mysuru", "state": "Karnataka", "adminUsername": username,
-                                   "adminFullName": "Clinic B Admin", "adminPassword": temp})
-    assert r.status_code == 201, r.text
-    fac = r.json()
-    c = login(username, temp)
-    assert c.post("/auth/change-password", {"currentPassword": temp, "newPassword": PASSWORD}).status_code == 200
-    c = login(username, PASSWORD)
-    c.facility = fac
-    c.username = username
-    return c
+from conftest import patient_payload, rid, create_user
 
 
 def test_me_reports_facility(admin, clinic_b):

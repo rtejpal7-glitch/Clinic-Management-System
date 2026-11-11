@@ -52,6 +52,14 @@ class PrescriptionItemDto : public oatpp::DTO {
   DTO_FIELD(Int32, durationDays);
   DTO_FIELD(Float64, quantity);
   DTO_FIELD(String, instructions);
+  // Decision-support provenance: MANUAL (typed by the doctor) or the panel the doctor
+  // explicitly added it from. Suggested values are kept so modifications are visible.
+  DTO_FIELD(String, genericCode);
+  DTO_FIELD(String, sourceKind);         // MANUAL | CLINICAL | MY_PATTERNS | NETWORK
+  DTO_FIELD(String, sourceSnapshotId);
+  DTO_FIELD(String, suggestedDose);
+  DTO_FIELD(String, suggestedFrequency);
+  DTO_FIELD(Int32, suggestedDurationDays);
 };
 
 class InvestigationOrderDto : public oatpp::DTO {
@@ -113,6 +121,12 @@ class ConsultationDto : public oatpp::DTO {
   DTO_FIELD(Vector<Object<AddendumDto>>, addenda);
   DTO_FIELD(Object<PrescriptionDto>, prescription);
   DTO_FIELD(Boolean, canEdit);
+  DTO_FIELD(String, specialtyCode);      // GENERAL | DERMATOLOGY
+};
+
+class FinalizeRequestDto : public oatpp::DTO {
+  DTO_INIT(FinalizeRequestDto, DTO)
+  DTO_FIELD(String, safetyOverrideReason);
 };
 
 class ConsultationUpdateDto : public oatpp::DTO {
@@ -161,6 +175,14 @@ class MedicationDto : public oatpp::DTO {
   DTO_FIELD(String, defaultRoute);
   DTO_FIELD(String, drugSchedule);
   DTO_FIELD(Boolean, isActive);
+  DTO_FIELD(String, genericCode);
+  DTO_FIELD(String, category);
+  DTO_FIELD(String, reviewStatus);       // UNREVIEWED | APPROVED | RETIRED (clinical information)
+  DTO_FIELD(Boolean, highRisk);
+  // Defaults are returned only when the clinical information is APPROVED
+  DTO_FIELD(String, defaultDose);
+  DTO_FIELD(String, defaultFrequency);
+  DTO_FIELD(Int32, defaultDurationDays);
 };
 
 class InvestigationCatalogueDto : public oatpp::DTO {

@@ -9,6 +9,8 @@
 #include "db/Db.hpp"
 #include "dto/ClinicalDtos.hpp"
 #include "security/AuthContext.hpp"
+#include "service/ConsultationExtension.hpp"
+#include <vector>
 
 namespace cf {
 
@@ -33,7 +35,9 @@ class ClinicalService {
                                                   const oatpp::Object<dto::ConsultationUpdateDto>& in);
   oatpp::Object<dto::ConsultationDto> updatePrescription(const AuthContext& ctx, const std::string& id,
                                                          const oatpp::Object<dto::PrescriptionUpdateDto>& in);
-  oatpp::Object<dto::ConsultationDto> finalize(const AuthContext& ctx, const std::string& id);
+  oatpp::Object<dto::ConsultationDto> finalize(const AuthContext& ctx, const std::string& id,
+                                               const FinalizeOptions& opts = {});
+  void addExtension(std::shared_ptr<ConsultationExtension> ext) { m_extensions.push_back(std::move(ext)); }
   oatpp::Object<dto::ConsultationDto> addAddendum(const AuthContext& ctx, const std::string& id,
                                                   const oatpp::Object<dto::AddendumInputDto>& in);
   oatpp::Vector<oatpp::Object<dto::TimelineEntryDto>> timeline(const AuthContext& ctx, const std::string& patientId) const;
@@ -53,6 +57,7 @@ class ClinicalService {
   Row requireOwnDraft(Conn& c, const AuthContext& ctx, const std::string& id, const oatpp::Int32& version) const;
   std::shared_ptr<Db> m_db;
   std::shared_ptr<AuditService> m_audit;
+  std::vector<std::shared_ptr<ConsultationExtension>> m_extensions;
 };
 
 }  // namespace cf

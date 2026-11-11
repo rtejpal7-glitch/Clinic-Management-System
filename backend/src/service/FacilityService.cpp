@@ -132,8 +132,9 @@ oatpp::Object<dto::FacilityDto> FacilityService::setNetworkSharing(const AuthCon
              Params(ctx.facilityId, *ref, ctx.userId));
     } else {
       // Leaving the network stops new contributions; already de-identified records are
-      // withdrawn from aggregation (see V012 network_case_records.withdrawn_at).
+      // withdrawn from aggregation (network_case_records.withdrawn_at).
       c.exec("UPDATE facilities SET network_sharing_enabled = false WHERE id = $1", Params(ctx.facilityId));
+      if (m_onLeave) m_onLeave(c, ctx.facilityId);
     }
     m_audit->record(c, ctx, AuditEvent{enable ? "NETWORK_SHARING_ENABLE" : "NETWORK_SHARING_DISABLE", "facility",
                                        ctx.facilityId, std::nullopt, "SUCCESS",

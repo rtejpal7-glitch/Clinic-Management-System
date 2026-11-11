@@ -2,6 +2,7 @@
 // Clinics (facilities) hosted on one ClinicFlow installation, and each clinic's
 // participation in the de-identified ClinicFlow prescribing network.
 
+#include <functional>
 #include <memory>
 
 #include "audit/AuditService.hpp"
@@ -24,7 +25,11 @@ class FacilityService {
   oatpp::Object<dto::FacilityDto> create(const AuthContext& ctx, const oatpp::Object<dto::FacilityCreateDto>& in);
   oatpp::Object<dto::FacilityDto> setNetworkSharing(const AuthContext& ctx, const oatpp::Object<dto::NetworkSharingDto>& in);
 
+ // Called (inside the transaction) when a clinic leaves the network, to withdraw its records.
+  void onNetworkLeave(std::function<void(Conn&, const std::string&)> fn) { m_onLeave = std::move(fn); }
+
  private:
+  std::function<void(Conn&, const std::string&)> m_onLeave;
   oatpp::Object<dto::FacilityDto> get(Conn& c, const std::string& id) const;
   std::shared_ptr<Db> m_db;
   std::shared_ptr<AuditService> m_audit;

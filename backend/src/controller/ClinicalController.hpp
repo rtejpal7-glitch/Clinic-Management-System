@@ -1,5 +1,6 @@
 #pragma once
 #include "BaseController.hpp"
+#include "common/Text.hpp"
 #include "dto/ClinicalDtos.hpp"
 #include "service/ClinicalService.hpp"
 
@@ -61,7 +62,18 @@ class ClinicalController : public BaseController {
     info->addResponse<Object<dto::ConsultationDto>>(Status::CODE_200, "application/json");
   }
   ENDPOINT("POST", "/api/v1/consultations/{id}/finalize", finalize, PATH(String, id), REQUEST(std::shared_ptr<IncomingRequest>, request)) {
-    return guard([&] { return createDtoResponse(Status::CODE_200, m_svc->finalize(auth(request, perm::CLINICAL_FINALIZE), id)); });
+    return guard([&] {
+      auto ctx = auth(request, perm::CLINICAL_FINALIZE);
+      // Optional body: {"safetyOverrideReason": "..."} when safety alerts require acknowledgement.
+      FinalizeOptions opts;
+      auto body = bodyOf(request);
+      if (body && !body->empty()) {
+        auto in = parse<Object<dto::FinalizeRequestDto>>(body);
+        auto reason = text::opt(in->safetyOverrideReason);
+        if (reason) opts.safetyOverrideReason = text::trim(*reason);
+      }
+      return createDtoResponse(Status::CODE_200, m_svc->finalize(ctx, id, opts));
+    });
   }
 
   ENDPOINT_INFO(addendum) {

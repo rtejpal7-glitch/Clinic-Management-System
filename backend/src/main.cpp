@@ -14,6 +14,7 @@
 #include "controller/AbdmController.hpp"
 #include "controller/AdminController.hpp"
 #include "controller/FacilityController.hpp"
+#include "controller/DermController.hpp"
 #include "controller/AuthController.hpp"
 #include "controller/BillingController.hpp"
 #include "controller/ClinicalController.hpp"
@@ -78,6 +79,9 @@ static void run() {
   auto patients = std::make_shared<cf::PatientService>(db, audit, cipher);
   auto scheduling = std::make_shared<cf::SchedulingService>(db, audit, notifications);
   auto clinical = std::make_shared<cf::ClinicalService>(db, audit);
+  auto derm = std::make_shared<cf::DermService>(db, audit, cipher);
+  clinical->addExtension(derm);  // safety acknowledgement + case capture at finalize
+  facilities->onNetworkLeave([derm](cf::Conn& c, const std::string& fid) { derm->withdrawFacilityFromNetwork(c, fid); });
   auto billing = std::make_shared<cf::BillingService>(db, audit);
   auto gateway = std::make_shared<cf::MockAbdmGateway>();
   auto abdm = std::make_shared<cf::AbdmService>(db, audit, cipher, gateway, clinical, patients);
@@ -101,6 +105,7 @@ static void run() {
   addController(std::make_shared<cf::AuthController>(om, auth, tp));
   addController(std::make_shared<cf::AdminController>(om, auth, tp, admin, audit, db, cfg.abdmMode));
   addController(std::make_shared<cf::FacilityController>(om, auth, tp, facilities));
+  addController(std::make_shared<cf::DermController>(om, auth, tp, derm));
   addController(std::make_shared<cf::PatientController>(om, auth, tp, patients, clinical, scheduling, billing));
   addController(std::make_shared<cf::SchedulingController>(om, auth, tp, scheduling));
   addController(std::make_shared<cf::ClinicalController>(om, auth, tp, clinical));

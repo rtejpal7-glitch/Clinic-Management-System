@@ -60,6 +60,7 @@ oatpp::Object<dto::ConsultationDto> ClinicalService::load(Conn& c, const std::st
   d->startedAt = r.ts("started_at");
   d->finalizedAt = r.ts("finalized_at");
   d->version = r.i32("version");
+  d->specialtyCode = r.s("specialty_code");
   d->canEdit = ctx && ctx->doctorId && *ctx->doctorId == r.str("doctor_id") && r.str("status") == "DRAFT" &&
                ctx->has(perm::CLINICAL_WRITE);
 
@@ -117,6 +118,12 @@ oatpp::Object<dto::ConsultationDto> ClinicalService::load(Conn& c, const std::st
           it->durationDays = x.i32("duration_days");
           it->quantity = x.f64("quantity");
           it->instructions = x.s("instructions");
+          it->genericCode = x.s("generic_code");
+          it->sourceKind = x.s("source_kind");
+          it->sourceSnapshotId = x.s("source_snapshot_id");
+          it->suggestedDose = x.s("suggested_dose");
+          it->suggestedFrequency = x.s("suggested_frequency");
+          it->suggestedDurationDays = x.i32("suggested_duration_days");
           p->items->push_back(it);
         });
   }
@@ -150,8 +157,11 @@ oatpp::Object<dto::ConsultationDto> ClinicalService::startFromAppointment(const 
     c.exec("UPDATE queue_tokens SET status = 'IN_CONSULTATION', called_at = coalesce(called_at, now()) WHERE appointment_id = $1",
            Params(appointmentId));
     // Carry forward the most recent past history and current medications as a starting point.
-    auto id = c.exec("INSERT INTO consultations (appointment_id, patient_id, doctor_id, past_medical_history, current_medications) "
-                     "SELECT $1, $2, $3, prev.past_medical_history, prev.current_medications FROM (SELECT 1) x "
+    // The clinic's specialty selects the specialty module (e.g. the dermatology assessment).
+    auto id = c.exec("INSERT INTO consultations (appointment_id, patient_id, doctor_id, past_medical_history, current_medications, "
+                     "  specialty_code) "
+                     "SELECT $1, $2, $3, prev.past_medical_history, prev.current_medications, "
+                     "  (SELECT specialty_code FROM facilities WHERE id = cf_current_facility()) FROM (SELECT 1) x "
                      "LEFT JOIN LATERAL (SELECT past_medical_history, current_medications FROM consultations "
                      "  WHERE patient_id = $2 AND status = 'FINALIZED' ORDER BY finalized_at DESC LIMIT 1) prev ON true "
                      "RETURNING id",
@@ -297,6 +307,10 @@ oatpp::Object<dto::ConsultationDto> ClinicalService::updatePrescription(const Au
       if (it->durationDays) v.check(*it->durationDays >= 1 && *it->durationDays <= 365, k + ".durationDays", "1 to 365 days");
       if (it->quantity) v.check(*it->quantity > 0 && *it->quantity <= 10000, k + ".quantity", "Must be positive");
       if (it->medicationId) v.check(text::isUuid(*it->medicationId), k + ".medicationId", "Invalid catalogue reference");
+      std::string sk = trimmed(it->sourceKind);
+      if (!sk.empty()) v.check(text::oneOf(sk, {"MANUAL", "CLINICAL", "MY_PATTERNS", "NETWORK"}), k + ".sourceKind", "Invalid source");
+      if (it->sourceSnapshotId) v.check(text::isUuid(*it->sourceSnapshotId), k + ".sourceSnapshotId", "Invalid reference");
+      if (it->suggestedDurationDays) v.check(*it->suggestedDurationDays >= 1 && *it->suggestedDurationDays <= 365, k + ".suggestedDurationDays", "1 to 365 days");
     }
   }
   if (in->investigations) {
@@ -326,11 +340,27 @@ oatpp::Object<dto::ConsultationDto> ClinicalService::updatePrescription(const Au
       c.exec("DELETE FROM prescription_items WHERE prescription_id = $1", Params(rxId));
       int order = 0;
       for (auto& it : *in->items) {
+        std::string sk = trimmed(it->sourceKind);
+        if (sk.empty()) sk = "MANUAL";
+        auto snap = opt(it->sourceSnapshotId);
+        if (sk != "MANUAL") {
+          // A suggestion-sourced item must point at a panel the doctor actually saw for this consultation.
+          if (!snap || c.exec("SELECT 1 FROM suggestion_snapshots WHERE id = $1 AND consultation_id = $2", Params(*snap, id)).empty())
+            throw ApiError::badRequest("Suggestion source does not belong to this consultation");
+        } else {
+          snap.reset();
+        }
+        // generic_code is taken from the catalogue, never from the client.
         c.exec("INSERT INTO prescription_items (prescription_id, medication_id, medicine_name, strength, dosage_form, dose, route, "
-               "frequency, duration_days, quantity, instructions, sort_order) VALUES ($1,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+               "frequency, duration_days, quantity, instructions, sort_order, generic_code, source_kind, source_snapshot_id, "
+               "suggested_dose, suggested_frequency, suggested_duration_days) "
+               "VALUES ($1,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,"
+               "  (SELECT generic_code FROM medication_catalogue WHERE id = $2::uuid),$13,$14::uuid,$15,$16,$17)",
                Params(rxId, opt(it->medicationId), trimmed(it->medicineName), opt(it->strength), opt(it->dosageForm),
                       trimmed(it->dose), text::upper(trimmed(it->route)), trimmed(it->frequency), it->durationDays, it->quantity,
-                      opt(it->instructions), order++));
+                      opt(it->instructions), order++, sk, snap, sk == "MANUAL" ? std::nullopt : opt(it->suggestedDose),
+                      sk == "MANUAL" ? std::nullopt : opt(it->suggestedFrequency),
+                      sk == "MANUAL" ? oatpp::Int32(nullptr) : it->suggestedDurationDays));
       }
     }
     if (in->investigations) {
@@ -359,7 +389,8 @@ oatpp::Object<dto::ConsultationDto> ClinicalService::updatePrescription(const Au
   });
 }
 
-oatpp::Object<dto::ConsultationDto> ClinicalService::finalize(const AuthContext& ctx, const std::string& id) {
+oatpp::Object<dto::ConsultationDto> ClinicalService::finalize(const AuthContext& ctx, const std::string& id,
+                                                              const FinalizeOptions& opts) {
   return m_db->tx([&](Conn& c) {
     auto row = requireOwnDraft(c, ctx, id, nullptr);
     std::string patientId = row.str("patient_id");
@@ -368,6 +399,7 @@ oatpp::Object<dto::ConsultationDto> ClinicalService::finalize(const AuthContext&
     auto dxCount = c.exec("SELECT count(*) AS n FROM consultation_diagnoses WHERE consultation_id = $1", Params(id)).first().i64v("n");
     v.check(dxCount > 0, "diagnoses", "At least one diagnosis is required before finalizing");
     v.throwIfAny("Consultation is incomplete");
+    for (auto& ext : m_extensions) ext->beforeFinalize(c, ctx, id, opts);
 
     c.exec("UPDATE prescriptions SET status = 'FINALIZED', finalized_at = now() WHERE consultation_id = $1", Params(id));
     c.exec("UPDATE consultations SET status = 'FINALIZED', finalized_at = now(), finalized_by = $2, version = version + 1 "
@@ -378,7 +410,9 @@ oatpp::Object<dto::ConsultationDto> ClinicalService::finalize(const AuthContext&
       if (st == "IN_CONSULTATION") SchedulingService::transition(c, ctx, apptId, st, "COMPLETED", "Consultation finalized");
       c.exec("UPDATE queue_tokens SET status = 'DONE', completed_at = now() WHERE appointment_id = $1", Params(apptId));
     }
-    m_audit->record(c, ctx, AuditEvent{"CONSULTATION_FINALIZE", "consultation", id, patientId, "SUCCESS", {}});
+    for (auto& ext : m_extensions) ext->afterFinalize(c, ctx, id);
+    m_audit->record(c, ctx, AuditEvent{"CONSULTATION_FINALIZE", "consultation", id, patientId, "SUCCESS",
+                                       {{"safetyOverride", opts.safetyOverrideReason.has_value()}}});
     return load(c, id, &ctx);
   });
 }
@@ -452,6 +486,15 @@ static oatpp::Object<dto::MedicationDto> medFromRow(const Row& r) {
   m->defaultRoute = r.s("default_route");
   m->drugSchedule = r.s("drug_schedule");
   m->isActive = r.b("is_active");
+  m->genericCode = r.s("generic_code");
+  m->category = r.s("category");
+  m->reviewStatus = r.s("review_status");
+  m->highRisk = r.b("high_risk");
+  if (r.str("review_status") == "APPROVED") {
+    m->defaultDose = r.s("default_dose");
+    m->defaultFrequency = r.s("default_frequency");
+    m->defaultDurationDays = r.i32("default_duration_days");
+  }
   return m;
 }
 
@@ -476,11 +519,21 @@ oatpp::Object<dto::MedicationDto> ClinicalService::saveMedication(const AuthCont
   v.check(!trimmed(in->dosageForm).empty(), "dosageForm", "Dosage form is required");
   v.throwIfAny();
   return m_db->tx([&](Conn& c) {
+    auto genericCode = opt(in->genericCode);
+    if (genericCode && c.exec("SELECT 1 FROM medication_catalogue WHERE generic_code = $1 LIMIT 1", Params(*genericCode)).empty())
+      throw ApiError::badRequest("Unknown generic code", {{"genericCode", "Pick an existing generic medicine"}});
+    // New products (e.g. a clinic's brands) share the generic's coded identity, but their
+    // clinical information starts UNREVIEWED.
     Result r = id.empty()
-                   ? c.exec("INSERT INTO medication_catalogue (generic_name, brand_name, strength, dosage_form, default_route, drug_schedule) "
-                            "VALUES ($1,$2,$3,$4,coalesce($5,'ORAL'),$6) RETURNING *",
+                   ? c.exec("INSERT INTO medication_catalogue (generic_name, brand_name, strength, dosage_form, default_route, drug_schedule, "
+                            "  generic_code, ingredient_codes, category, routes) "
+                            "SELECT $1,$2,$3,$4,coalesce($5,'ORAL'),$6,$7, "
+                            "  coalesce((SELECT ingredient_codes FROM medication_catalogue WHERE generic_code = $7 LIMIT 1), "
+                            "           CASE WHEN $7::text IS NULL THEN '{}'::text[] ELSE ARRAY[$7::text] END), "
+                            "  (SELECT category FROM medication_catalogue WHERE generic_code = $7 LIMIT 1), "
+                            "  ARRAY[coalesce($5,'ORAL')] RETURNING *",
                             Params(trimmed(in->genericName), opt(in->brandName), trimmed(in->strength),
-                                   text::upper(trimmed(in->dosageForm)), opt(in->defaultRoute), opt(in->drugSchedule)))
+                                   text::upper(trimmed(in->dosageForm)), opt(in->defaultRoute), opt(in->drugSchedule), genericCode))
                    : c.exec("UPDATE medication_catalogue SET generic_name=$2, brand_name=$3, strength=$4, dosage_form=$5, "
                             "default_route=coalesce($6, default_route), drug_schedule=$7, is_active=coalesce($8, is_active) "
                             "WHERE id = $1 RETURNING *",

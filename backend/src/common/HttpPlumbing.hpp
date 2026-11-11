@@ -35,18 +35,25 @@ class BodyCaptureInterceptor : public oatpp::web::server::interceptor::RequestIn
  public:
   explicit BodyCaptureInterceptor(std::shared_ptr<oatpp::data::mapping::ObjectMapper> om) : m_om(std::move(om)) {}
   static constexpr v_int64 MAX_BODY = 1024 * 1024;
+  // Clinical photograph uploads (base64 JSON) get a larger, still bounded, limit.
+  static constexpr v_int64 MAX_PHOTO_BODY = 9 * 1024 * 1024;
   std::shared_ptr<OutgoingResponse> intercept(const std::shared_ptr<IncomingRequest>& request) override {
+    std::string path = request->getStartingLine().path.toString();
+    std::string method = request->getStartingLine().method.toString();
+    bool photo = method == "POST" && path.size() > 7 && path.compare(path.size() - 7, 7, "/photos") == 0;
+    const v_int64 limit = photo ? MAX_PHOTO_BODY : MAX_BODY;
+    const char* limitText = photo ? "Request body exceeds 9 MB" : "Request body exceeds 1 MB";
     auto len = request->getHeader("Content-Length");
     if (len) {
       v_int64 n = 0;
       try { n = std::stoll(*len); } catch (...) { n = -1; }
       if (n < 0) return BaseController::errorJson(m_om, 400, "BAD_REQUEST", "Invalid Content-Length");
-      if (n > MAX_BODY) return BaseController::errorJson(m_om, 413, "PAYLOAD_TOO_LARGE", "Request body exceeds 1 MB");
+      if (n > limit) return BaseController::errorJson(m_om, 413, "PAYLOAD_TOO_LARGE", limitText);
     }
     auto te = request->getHeader("Transfer-Encoding");
     oatpp::String body = (len || te) ? request->readBodyToString() : oatpp::String("");
-    if (body && body->size() > static_cast<size_t>(MAX_BODY))
-      return BaseController::errorJson(m_om, 413, "PAYLOAD_TOO_LARGE", "Request body exceeds 1 MB");
+    if (body && body->size() > static_cast<size_t>(limit))
+      return BaseController::errorJson(m_om, 413, "PAYLOAD_TOO_LARGE", limitText);
     request->putBundleData("cf.body", body ? body : oatpp::String(""));
     return nullptr;
   }

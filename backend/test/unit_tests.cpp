@@ -3,6 +3,7 @@
 
 #include <functional>
 #include <iostream>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,10 @@
 #include "service/DuplicateScoring.hpp"
 #include "service/NotificationService.hpp"
 #include "service/PatientService.hpp"
+#include "derm/CdsEngine.hpp"
+#include "derm/DermVocabulary.hpp"
+#include "derm/MedicationSafety.hpp"
+#include "derm/PatternStats.hpp"
 
 namespace {
 int g_failed = 0, g_passed = 0;
@@ -233,6 +238,162 @@ TEST(fhir_validator_detects_problems) {
   auto wrongOrder = bundle;
   std::swap(wrongOrder["entry"][0], wrongOrder["entry"][1]);
   CHECK(!FhirMapper::validateBundle(wrongOrder).empty());
+}
+
+// ---------------- Dermatology decision support ----------------
+using cf::derm::DermFacts;
+using nlohmann::json;
+
+static std::vector<cf::derm::CdsCondition> testConditions() {
+  cf::derm::CdsCondition urt{"URTICARIA", "Urticaria", "L50.9", "wheals"};
+  urt.features = {{"LESION:WHEAL", 5}, {"PROBLEM:HIVES_SWELLING", 3}, {"SYMPTOM:ITCHING", 2}};
+  urt.content = {{"QUESTION", "Do wheals fade within 24 h?", {}, "", {}, "ref"},
+                 {"TREATMENT", "Second-generation antihistamine", {"FEXOFENADINE"}, "FIRST", {}, "ref"},
+                 {"TREATMENT", "Short steroid course for severe flares", {"PREDNISOLONE"}, "ADJUNCT", {"SEVERE"}, "ref"}};
+  cf::derm::CdsCondition tinea{"TINEA_CORPORIS", "Tinea corporis", "B35.4", "ring"};
+  tinea.features = {{"CONFIG:ANNULAR", 4}, {"LESION:SCALE", 2}, {"SYMPTOM:ITCHING", 2}};
+  return {urt, tinea};
+}
+
+TEST(cds_requires_minimum_information) {
+  DermFacts f;
+  f.lesions = {"WHEAL"};
+  auto r = cf::derm::evaluate(f, testConditions(), {}, 0);
+  CHECK_EQ(r["status"].get<std::string>(), std::string("INSUFFICIENT_DATA"));
+  CHECK(r["conditions"].empty());
+  CHECK(r["missing"].size() == 2);  // problem type and duration
+}
+
+TEST(cds_never_uses_unapproved_content) {
+  DermFacts f;
+  f.problemType = "HIVES_SWELLING"; f.lesions = {"WHEAL"}; f.durationDays = 2;
+  auto r = cf::derm::evaluate(f, {}, {}, 23);
+  CHECK_EQ(r["status"].get<std::string>(), std::string("NO_APPROVED_CONTENT"));
+  CHECK(r["conditions"].empty() && r["treatments"].empty());
+  CHECK(r["message"].get<std::string>().find("23") != std::string::npos);
+}
+
+TEST(cds_ranks_with_reasons_and_filters_by_severity) {
+  DermFacts f;
+  f.problemType = "HIVES_SWELLING"; f.lesions = {"WHEAL"}; f.symptoms = {"ITCHING"}; f.durationDays = 3; f.severity = "MILD";
+  auto r = cf::derm::evaluate(f, testConditions(), {}, 0);
+  CHECK_EQ(r["status"].get<std::string>(), std::string("OK"));
+  CHECK_EQ(r["conditions"][0]["code"].get<std::string>(), std::string("URTICARIA"));
+  CHECK_EQ(r["conditions"][0]["strength"].get<std::string>(), std::string("Strong match"));
+  CHECK(r["conditions"][0]["matched"].size() == 3);
+  // Tinea shares only itching (2/8 = 0.25) - shown as weak at most, never above urticaria
+  for (auto& t : r["treatments"]) CHECK(t["text"].get<std::string>().find("steroid") == std::string::npos);  // SEVERE-only filtered
+  CHECK(r["questions"].size() >= 1);
+}
+
+TEST(cds_red_flags_fire_even_with_insufficient_data) {
+  DermFacts f;
+  f.sites = {"MUCOSA"}; f.lesions = {"EROSION"};
+  cf::derm::CdsRedFlag sjs{"SJS", "Possible SJS/TEN", "Urgent", "ref", json{{"all", {"SITE:MUCOSA"}}, {"any", {"LESION:BULLA", "LESION:EROSION"}}}};
+  cf::derm::CdsRedFlag ulcer{"ULCER", "Non-healing ulcer", "Refer", "ref", json{{"all", {"LESION:ULCER", "DURATION_GE_DAYS:42"}}}};
+  auto r = cf::derm::evaluate(f, testConditions(), {sjs, ulcer}, 0);
+  CHECK_EQ(r["status"].get<std::string>(), std::string("INSUFFICIENT_DATA"));
+  CHECK(r["redFlags"].size() == 1);
+  CHECK_EQ(r["redFlags"][0]["code"].get<std::string>(), std::string("SJS"));
+  f.lesions = {"ULCER"}; f.durationDays = 30;
+  CHECK(!cf::derm::redFlagMatches(ulcer, f, cf::derm::factTokens(f)));
+  f.durationDays = 50;
+  CHECK(cf::derm::redFlagMatches(ulcer, f, cf::derm::factTokens(f)));
+}
+
+TEST(vocabulary_bands) {
+  CHECK_EQ(cf::derm::ageBand(7), std::string("0-11"));
+  CHECK_EQ(cf::derm::ageBand(65), std::string("60+"));
+  CHECK_EQ(*cf::derm::durationDays(3, "WEEKS"), 21);
+  CHECK_EQ(cf::derm::durationBand(50), std::string("6w-6m"));
+  CHECK(cf::derm::inVocab(cf::derm::lesionTypes(), "WHEAL"));
+  CHECK(!cf::derm::inVocab(cf::derm::lesionTypes(), "wheal"));
+}
+
+static cf::derm::SafetyMed med(int idx, const std::string& name, const std::string& code, bool reviewed, json rules = json::array()) {
+  cf::derm::SafetyMed m;
+  m.index = idx; m.name = name; m.genericCode = code; m.ingredients = {code}; m.rules = rules; m.reviewed = reviewed; m.catalogued = true;
+  return m;
+}
+
+TEST(safety_pregnancy_contraindication_requires_override_only_when_reviewed) {
+  cf::derm::SafetyPatient p;
+  p.ageYears = 28; p.sex = "FEMALE"; p.pregnancy = "PREGNANT";
+  json rules = json::array({{{"tag", "PREGNANCY"}, {"level", "CONTRAINDICATED"}, {"note", "teratogen"}}});
+  auto a = cf::derm::checkPrescription(p, {med(0, "Isotretinoin 20 mg", "ISOTRETINOIN", true, rules)}, {});
+  CHECK(cf::derm::requiresOverride(a));
+  CHECK_EQ(a[0]["level"].get<std::string>(), std::string("CONTRAINDICATED"));
+  auto b = cf::derm::checkPrescription(p, {med(0, "Isotretinoin 20 mg", "ISOTRETINOIN", false, rules)}, {});
+  CHECK(!cf::derm::requiresOverride(b));
+  CHECK_EQ(b[0]["level"].get<std::string>(), std::string("WARNING"));
+  CHECK(b[0]["message"].get<std::string>().find("not yet clinically reviewed") != std::string::npos);
+  p.pregnancy = "";
+  auto c = cf::derm::checkPrescription(p, {med(0, "Isotretinoin 20 mg", "ISOTRETINOIN", true, rules)}, {});
+  CHECK_EQ(c[0]["code"].get<std::string>(), std::string("PREGNANCY_STATUS_UNKNOWN"));
+}
+
+TEST(safety_allergy_age_duplicates_interactions) {
+  cf::derm::SafetyPatient p;
+  p.ageYears = 6; p.sex = "MALE"; p.allergies = {"Tetracycline"};
+  json age8 = json::array({{{"tag", "AGE_UNDER_8"}, {"level", "CONTRAINDICATED"}}});
+  auto doxy = med(0, "Doxycycline 100 mg", "DOXYCYCLINE", true, age8);
+  auto iso = med(1, "Isotretinoin 20 mg", "ISOTRETINOIN", true);
+  auto doxy2 = med(2, "Doxycycline 100 mg (brand)", "DOXYCYCLINE", true);
+  cf::derm::SafetyInteraction ix{"DOXYCYCLINE", "ISOTRETINOIN", "CONTRAINDICATED", "intracranial hypertension", "label", true};
+  auto a = cf::derm::checkPrescription(p, {doxy, iso, doxy2}, {ix});
+  std::set<std::string> codes;
+  for (auto& x : a) codes.insert(x["code"].get<std::string>());
+  CHECK(codes.count("ALLERGY"));
+  CHECK(codes.count("PATIENT_FACTOR_AGE_UNDER_8"));
+  CHECK(codes.count("DUPLICATE_THERAPY"));
+  CHECK(codes.count("INTERACTION_CONTRAINDICATED"));
+  CHECK_EQ(a[0]["level"].get<std::string>(), std::string("CONTRAINDICATED"));  // most serious first
+  p.ageYears = 30; p.allergies.clear();
+  auto b = cf::derm::checkPrescription(p, {med(0, "Adapalene gel", "ADAPALENE", true)}, {ix});
+  CHECK(b.empty());
+}
+
+static cf::derm::PatternCase pcase(const std::string& g, const std::string& doc, const std::string& fac, const std::string& outcome = "") {
+  cf::derm::PatternCase c;
+  c.generics = {g};
+  c.items = json::array({{{"generic", g}, {"name", g}, {"route", "ORAL"}, {"frequency", "Once daily"}, {"durationDays", 14}}});
+  c.doctorKey = doc; c.facilityKey = fac; c.outcome = outcome; c.period = "2026-05-01";
+  return c;
+}
+
+TEST(patterns_own_threshold_and_percentages) {
+  std::vector<cf::derm::PatternCase> v = {pcase("A", "me", "f"), pcase("A", "me", "f", "IMPROVED")};
+  CHECK_EQ(cf::derm::summarizeOwn(v)["status"].get<std::string>(), std::string("INSUFFICIENT_DATA"));
+  v.push_back(pcase("B", "me", "f", "IMPROVED"));
+  v.push_back(pcase("A", "me", "f", "WORSENED"));
+  auto s = cf::derm::summarizeOwn(v);
+  CHECK_EQ(s["status"].get<std::string>(), std::string("OK"));
+  CHECK_EQ(s["medications"][0]["generic"].get<std::string>(), std::string("A"));
+  CHECK(s["medications"][0]["percent"].get<double>() == 75.0);
+  CHECK(s["medications"][0]["outcomes"]["shown"].get<bool>() == false);  // only 2 outcomes for A
+}
+
+TEST(patterns_network_disclosure_controls) {
+  std::vector<cf::derm::PatternCase> v;
+  for (int i = 0; i < 12; ++i) v.push_back(pcase("A", "d" + std::to_string(i % 3), "f1"));
+  auto s = cf::derm::summarizeNetwork(v);
+  CHECK_EQ(s["status"].get<std::string>(), std::string("INSUFFICIENT_DATA"));  // single clinic
+  CHECK(s["caseCount"].is_null());                                             // exact count withheld
+  for (int i = 0; i < 6; ++i) v.push_back(pcase("A", "d" + std::to_string(3 + i % 2), "f2"));
+  s = cf::derm::summarizeNetwork(v);
+  CHECK_EQ(s["status"].get<std::string>(), std::string("OK"));
+  CHECK(s["doctorCount"].get<int>() == 5 && s["clinicCount"].get<int>() == 2);
+  // A medicine used by a single doctor, or in < 3 cases, is not listed individually
+  v.push_back(pcase("RARE", "d0", "f1"));
+  v.push_back(pcase("RARE", "d0", "f1"));
+  v.push_back(pcase("RARE", "d0", "f1"));
+  s = cf::derm::summarizeNetwork(v);
+  for (auto& m : s["medications"]) CHECK(m["generic"].get<std::string>() != "RARE");
+  // Dominance: > 70 % from one clinic suppresses
+  std::vector<cf::derm::PatternCase> dom;
+  for (int i = 0; i < 20; ++i) dom.push_back(pcase("A", "d" + std::to_string(i % 4), "f1"));
+  for (int i = 0; i < 3; ++i) dom.push_back(pcase("A", "x" + std::to_string(i), "f2"));
+  CHECK_EQ(cf::derm::summarizeNetwork(dom)["status"].get<std::string>(), std::string("INSUFFICIENT_DATA"));
 }
 
 int main() {
