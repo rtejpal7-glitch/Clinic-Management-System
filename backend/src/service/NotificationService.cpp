@@ -20,15 +20,15 @@ void NotificationService::queueAppointmentReminder(Conn& c, const std::string& a
   // Reminder 24h before the appointment, or 2h before if booked inside 24h.
   // Skipped when the appointment starts within the next hour.
   c.exec(
-      "INSERT INTO notifications (channel, recipient, template_code, payload, entity_type, entity_id, scheduled_for) "
+      "INSERT INTO notifications (channel, recipient, template_code, payload, entity_type, entity_id, scheduled_for, facility_id) "
       "SELECT 'SMS', p.mobile, 'APPOINTMENT_REMINDER', "
       "  jsonb_build_object('patientFirstName', split_part(p.full_name, ' ', 1), 'doctorName', d.display_name, "
-      "    'startAt', to_char(a.start_at AT TIME ZONE s.timezone, 'DD Mon YYYY HH12:MI AM'), 'clinicName', s.clinic_name), "
+      "    'startAt', to_char(a.start_at AT TIME ZONE s.timezone, 'DD Mon YYYY HH12:MI AM'), 'clinicName', f.name), "
       "  'appointment', a.id, "
       "  CASE WHEN a.start_at - now() > interval '24 hours' THEN a.start_at - interval '24 hours' "
-      "       ELSE a.start_at - interval '2 hours' END "
+      "       ELSE a.start_at - interval '2 hours' END, a.facility_id "
       "FROM appointments a JOIN patients p ON p.id = a.patient_id JOIN doctors d ON d.id = a.doctor_id "
-      "CROSS JOIN clinic_settings s "
+      "JOIN facilities f ON f.id = a.facility_id CROSS JOIN clinic_settings s "
       "WHERE a.id = $1 AND s.id = 1 AND a.start_at - now() > interval '1 hour'",
       Params(appointmentId));
 }

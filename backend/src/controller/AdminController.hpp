@@ -194,6 +194,7 @@ class AdminController : public BaseController {
       aq.outcome = q(request, "outcome");
       aq.page = qInt(request, "page", 1);
       aq.size = qInt(request, "size", 50);
+      aq.includeInstallationLevel = ctx.has(perm::PLATFORM_MANAGE);
       return createDtoResponse(Status::CODE_200, m_audit->list(aq));
     });
   }

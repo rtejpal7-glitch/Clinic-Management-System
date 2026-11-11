@@ -42,7 +42,7 @@ oatpp::Object<dto::AbdmStatusDto> AbdmService::status() const {
                   ? "ABDM integration is running in MOCK mode. No data is sent to or received from ABDM. "
                     "ABHA verifications, consents and shares shown here are simulations."
                   : "Live ABDM gateway";
-  s->hfrId = m_db->withConn([](Conn& c) { return c.exec("SELECT hfr_id FROM clinic_settings WHERE id = 1").first().s("hfr_id"); });
+  s->hfrId = m_db->withConn([](Conn& c) { return c.exec("SELECT hfr_id FROM facilities WHERE id = cf_current_facility()").first().s("hfr_id"); });
   s->supportedHiTypes = oatpp::Vector<oatpp::String>::createShared();
   for (auto& h : HI_TYPES) s->supportedHiTypes->push_back(h);
   s->supportedPurposes = oatpp::Vector<oatpp::String>::createShared();

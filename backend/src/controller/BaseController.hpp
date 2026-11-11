@@ -152,6 +152,11 @@ class BaseController : public oatpp::web::server::api::ApiController {
   }
 
   std::shared_ptr<OutgoingResponse> guard(const std::function<std::shared_ptr<OutgoingResponse>()>& fn) {
+    // Tenant context is per request: start empty, always clear on the way out.
+    struct ContextReset {
+      ContextReset() { DbContext::clear(); }
+      ~ContextReset() { DbContext::clear(); }
+    } reset;
     try {
       return fn();
     } catch (const ApiError& e) {

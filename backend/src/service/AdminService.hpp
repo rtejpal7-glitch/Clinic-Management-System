@@ -33,9 +33,10 @@ class AdminService {
   oatpp::Object<dto::DashboardDto> dashboard(const AuthContext& ctx) const;
 
  private:
+  static oatpp::Object<dto::SettingsDto> toSettings(const Row& r);
   oatpp::Object<dto::UserDto> getUser(Conn& c, const std::string& id) const;
   oatpp::Object<dto::RoleDto> getRole(Conn& c, const std::string& id) const;
-  void setUserRoles(Conn& c, const std::string& userId, const oatpp::Vector<oatpp::String>& roles) const;
+  void setUserRoles(const AuthContext& ctx, Conn& c, const std::string& userId, const oatpp::Vector<oatpp::String>& roles) const;
   void ensureAdminRemains(Conn& c) const;
   std::shared_ptr<Db> m_db;
   std::shared_ptr<AuditService> m_audit;

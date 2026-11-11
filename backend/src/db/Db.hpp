@@ -99,6 +99,41 @@ class Result {
   std::shared_ptr<PGresult> m_res;
 };
 
+// Request-scoped tenant context. Each HTTP request is served on one thread, so the
+// facility of the authenticated caller is held thread-locally and applied to every
+// pooled connection the request checks out (set_config('app.facility_id')). The
+// PostgreSQL RLS policies from V009 then restrict every clinical/financial table to
+// that facility. Bypass is only for trusted cross-facility code paths (login,
+// background jobs, de-identified network aggregation) and is always scoped.
+struct DbContext {
+  std::string facilityId;  // empty => no facility (RLS hides all tenant rows)
+  bool bypass = false;
+  static DbContext& current();
+  static void clear() { current() = DbContext{}; }
+};
+class ScopedFacility {
+ public:
+  explicit ScopedFacility(std::string facilityId, bool bypass = false) : m_prev(DbContext::current()) {
+    DbContext::current().facilityId = std::move(facilityId);
+    DbContext::current().bypass = bypass;
+  }
+  ~ScopedFacility() { if (!m_committed) DbContext::current() = m_prev; }
+  // Leave the scope with a new (non-bypass) facility context instead of restoring.
+  void commit(const std::string& facilityId) {
+    DbContext::current().facilityId = facilityId;
+    DbContext::current().bypass = false;
+    m_committed = true;
+  }
+  ScopedFacility(const ScopedFacility&) = delete;
+  ScopedFacility& operator=(const ScopedFacility&) = delete;
+ private:
+  DbContext m_prev;
+  bool m_committed = false;
+};
+struct ScopedRlsBypass : ScopedFacility {
+  ScopedRlsBypass() : ScopedFacility(DbContext::current().facilityId, true) {}
+};
+
 class Conn {
  public:
   explicit Conn(PGconn* c) : m_conn(c) {}
@@ -110,6 +145,9 @@ class Conn {
   void execRaw(const std::string& sql) const;  // multi-statement, no params (migrations only)
   bool healthy() const { return PQstatus(m_conn) == CONNECTION_OK; }
   PGconn* raw() const { return m_conn; }
+  // Last tenant context applied to this session (avoids a round trip when unchanged)
+  std::string appliedFacility = "\x01unset";
+  bool appliedBypass = false;
 
  private:
   PGconn* m_conn;

@@ -23,6 +23,10 @@ class CurrentUserDto : public oatpp::DTO {
   DTO_FIELD(String, doctorId);
   DTO_FIELD(Boolean, mustChangePassword);
   DTO_FIELD(Int32, sessionIdleMinutes);
+  DTO_FIELD(String, facilityId);
+  DTO_FIELD(String, facilityCode);
+  DTO_FIELD(String, facilityName);
+  DTO_FIELD(String, specialty);
 };
 
 class LoginResponseDto : public oatpp::DTO {

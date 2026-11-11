@@ -119,13 +119,19 @@ AuthContext AuthService::authenticate(const oatpp::String& header, const Request
 
   AuthContext ctx;
   ctx.meta = meta;
+  // Resolve identity before any facility is known: sessions/users are not tenant
+  // tables, but the doctor profile join is, so this lookup runs with a scoped bypass.
+  DbContext::clear();
+  ScopedFacility resolving("", true);
   bool found = m_db->withConn([&](Conn& c) {
     auto r = c.exec(
         "SELECT s.id AS sid, u.id AS uid, u.username, u.full_name, u.must_change_password, "
         "       (SELECT session_idle_minutes FROM clinic_settings WHERE id = 1) AS idle, "
-        "       (s.last_seen_at < now() - interval '60 seconds') AS stale, d.id AS doctor_id "
+        "       (s.last_seen_at < now() - interval '60 seconds') AS stale, d.id AS doctor_id, "
+        "       f.id AS facility_id, f.code AS facility_code, f.name AS facility_name, f.specialty_code "
         "FROM user_sessions s JOIN users u ON u.id = s.user_id "
-        "LEFT JOIN doctors d ON d.user_id = u.id AND d.is_active "
+        "JOIN facilities f ON f.id = u.facility_id AND f.is_active "
+        "LEFT JOIN doctors d ON d.user_id = u.id AND d.is_active AND d.facility_id = u.facility_id "
         "WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now() AND u.is_active "
         "  AND s.last_seen_at > now() - make_interval(mins => (SELECT session_idle_minutes FROM clinic_settings WHERE id = 1))",
         Params(tokenHash));
@@ -138,6 +144,10 @@ AuthContext AuthService::authenticate(const oatpp::String& header, const Request
     ctx.mustChangePassword = row.boolv("must_change_password");
     ctx.sessionIdleMinutes = static_cast<int>(row.i64v("idle", 30));
     if (!row.isNull("doctor_id")) ctx.doctorId = row.str("doctor_id");
+    ctx.facilityId = row.str("facility_id");
+    ctx.facilityCode = row.str("facility_code");
+    ctx.facilityName = row.str("facility_name");
+    ctx.specialty = row.str("specialty_code");
     // Sliding idle window, throttled to one write per minute.
     if (row.boolv("stale")) c.exec("UPDATE user_sessions SET last_seen_at = now() WHERE id = $1", Params(ctx.sessionId));
     auto perms = c.exec(
@@ -153,6 +163,9 @@ AuthContext AuthService::authenticate(const oatpp::String& header, const Request
     return true;
   });
   if (!found) throw ApiError(401, "SESSION_INVALID", "Session expired or invalid. Please sign in again.");
+  // From here on, every connection this request checks out is pinned to the caller's
+  // facility; the outer guard() clears it when the request ends.
+  resolving.commit(ctx.facilityId);
   // Accounts with a temporary password (new or reset) may only change their password.
   if (ctx.mustChangePassword && !requiredPermission.empty())
     throw ApiError(403, "PASSWORD_CHANGE_REQUIRED", "You must change your temporary password before continuing");
@@ -180,6 +193,10 @@ oatpp::Object<dto::CurrentUserDto> AuthService::currentUser(const AuthContext& c
   u->doctorId = ctx.doctorId ? oatpp::String(*ctx.doctorId) : nullptr;
   u->mustChangePassword = ctx.mustChangePassword;
   u->sessionIdleMinutes = ctx.sessionIdleMinutes;
+  u->facilityId = ctx.facilityId;
+  u->facilityCode = ctx.facilityCode;
+  u->facilityName = ctx.facilityName;
+  u->specialty = ctx.specialty;
   return u;
 }
 
@@ -217,12 +234,13 @@ void AuthService::bootstrapAdmin(const Config& cfg) {
   validatePasswordPolicy(cfg.bootstrapAdminPassword, cfg.bootstrapAdminUsername);
   std::string hash = crypto::password::hash(cfg.bootstrapAdminPassword);
   m_db->tx([&](Conn& c) {
-    auto id = c.exec("INSERT INTO users (username, full_name, password_hash, must_change_password) "
-                     "VALUES ($1, 'Clinic Administrator', $2, $3) RETURNING id",
+    auto id = c.exec("INSERT INTO users (username, full_name, password_hash, must_change_password, facility_id) "
+                     "VALUES ($1, 'Clinic Administrator', $2, $3, '00000000-0000-4000-8000-000000000001') RETURNING id",
                      Params(cfg.bootstrapAdminUsername, hash, cfg.appEnv == "production"))
                   .first()
                   .str("id");
-    c.exec("INSERT INTO user_roles (user_id, role_id) SELECT $1, id FROM roles WHERE code = 'ADMIN'", Params(id));
+    c.exec("INSERT INTO user_roles (user_id, role_id) SELECT $1, id FROM roles "
+           "WHERE code IN ('ADMIN','PLATFORM_ADMIN') AND facility_id IS NULL", Params(id));
     m_audit->record(c, AuditActor{std::nullopt, "system", "", {"127.0.0.1", "bootstrap"}},
                     AuditEvent{"USER_CREATE", "user", id, std::nullopt, "SUCCESS", {{"bootstrap", true}}});
   });

@@ -142,6 +142,11 @@ void Conn::execRaw(const std::string& sql) const {
   PQclear(res);
 }
 
+DbContext& DbContext::current() {
+  thread_local DbContext ctx;
+  return ctx;
+}
+
 // ---------------- Db ----------------
 std::unique_ptr<Conn> Db::connect(const std::string& url) {
   PGconn* pc = PQconnectdb(url.c_str());
@@ -173,6 +178,19 @@ Db::Lease Db::acquire() {
   if (!c->healthy()) {
     PQreset(c->raw());
     if (!c->healthy()) c = connect(m_url);
+    c->appliedFacility = "\x01unset";
+  }
+  const auto& ctx = DbContext::current();
+  if (c->appliedFacility != ctx.facilityId || c->appliedBypass != ctx.bypass) {
+    try {
+      c->exec("SELECT set_config('app.facility_id', $1, false), set_config('app.rls_bypass', $2, false)",
+              Params(ctx.facilityId, std::string(ctx.bypass ? "on" : "off")));
+      c->appliedFacility = ctx.facilityId;
+      c->appliedBypass = ctx.bypass;
+    } catch (...) {
+      release(std::move(c));
+      throw;
+    }
   }
   return Lease(this, std::move(c));
 }

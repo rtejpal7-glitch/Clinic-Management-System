@@ -26,6 +26,9 @@ void Migrator::run(const std::string& databaseUrl, const std::string& dir) {
 
   auto conn = Db::connect(databaseUrl);
   conn->exec("SELECT pg_advisory_lock(727001)");  // serialize concurrent starters
+  // Migrations run as the schema owner; FORCE ROW LEVEL SECURITY applies to the owner
+  // too, so data migrations must explicitly see every facility's rows.
+  conn->exec("SELECT set_config('app.rls_bypass', 'on', false)");
   try {
     conn->exec(
         "CREATE TABLE IF NOT EXISTS schema_migrations ("

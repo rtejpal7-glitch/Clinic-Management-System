@@ -46,6 +46,9 @@ struct AuditQuery {
   std::optional<std::string> from, to, userId, action, entityType, entityId, patientId, outcome;
   int page = 1;
   int size = 50;
+  // Clinic scoping: entries of the caller's facility; platform administrators also see
+  // installation-level entries that have no facility (e.g. failed logins).
+  bool includeInstallationLevel = false;
 };
 
 class AuditService {

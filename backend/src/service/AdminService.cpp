@@ -18,6 +18,9 @@ static const char* USER_SELECT =
     "  coalesce((SELECT array_agg(r.code ORDER BY r.code) FROM user_roles ur JOIN roles r ON r.id = ur.role_id "
     "            WHERE ur.user_id = u.id), '{}') AS roles "
     "FROM users u LEFT JOIN doctors d ON d.user_id = u.id ";
+// Users are not an RLS table (login is global), so every admin query filters by the
+// caller's facility explicitly: cf_current_facility() is the request's facility.
+static const char* USER_SCOPE = "u.facility_id = cf_current_facility() ";
 
 static oatpp::Object<dto::UserDto> toUser(const Row& r) {
   auto u = dto::UserDto::createShared();
@@ -36,7 +39,8 @@ static oatpp::Object<dto::UserDto> toUser(const Row& r) {
 }
 
 oatpp::Object<dto::UserDto> AdminService::getUser(Conn& c, const std::string& id) const {
-  auto r = c.exec(std::string(USER_SELECT) + "WHERE u.id = $1", Params(id));
+  if (!text::isUuid(id)) throw ApiError::notFound("User");
+  auto r = c.exec(std::string(USER_SELECT) + "WHERE u.id = $1 AND " + USER_SCOPE, Params(id));
   if (r.empty()) throw ApiError::notFound("User");
   return toUser(r.first());
 }
@@ -44,16 +48,27 @@ oatpp::Object<dto::UserDto> AdminService::getUser(Conn& c, const std::string& id
 oatpp::Vector<oatpp::Object<dto::UserDto>> AdminService::listUsers() const {
   return m_db->withConn([&](Conn& c) {
     auto out = oatpp::Vector<oatpp::Object<dto::UserDto>>::createShared();
-    c.exec(std::string(USER_SELECT) + "ORDER BY u.full_name").each([&](const Row& r) { out->push_back(toUser(r)); });
+    c.exec(std::string(USER_SELECT) + "WHERE " + USER_SCOPE + "ORDER BY u.full_name").each([&](const Row& r) { out->push_back(toUser(r)); });
     return out;
   });
 }
 
-void AdminService::setUserRoles(Conn& c, const std::string& userId, const oatpp::Vector<oatpp::String>& roles) const {
+void AdminService::setUserRoles(const AuthContext& ctx, Conn& c, const std::string& userId,
+                                const oatpp::Vector<oatpp::String>& roles) const {
   if (!roles || roles->empty()) throw ApiError::badRequest("At least one role is required", {{"roles", "Select a role"}});
+  bool platform = ctx.has(perm::PLATFORM_MANAGE);
+  // A clinic administrator can neither grant nor remove the platform role.
+  bool hadPlatform = c.exec("SELECT EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id "
+                            "WHERE ur.user_id = $1 AND r.code = 'PLATFORM_ADMIN') AS e", Params(userId)).first().boolv("e");
+  bool wantsPlatform = false;
+  for (auto& code : *roles) if (code && *code == "PLATFORM_ADMIN") wantsPlatform = true;
+  if (!platform && wantsPlatform != hadPlatform)
+    throw ApiError(403, "FORBIDDEN", "Only a platform administrator can change the platform administrator role");
   c.exec("DELETE FROM user_roles WHERE user_id = $1", Params(userId));
   for (auto& code : *roles) {
-    auto r = c.exec("INSERT INTO user_roles (user_id, role_id) SELECT $1, id FROM roles WHERE code = $2 RETURNING role_id",
+    // System roles (facility_id NULL) or roles of the caller's own clinic only.
+    auto r = c.exec("INSERT INTO user_roles (user_id, role_id) SELECT $1, id FROM roles WHERE code = $2 "
+                    "AND (facility_id IS NULL OR facility_id = cf_current_facility()) RETURNING role_id",
                     Params(userId, code));
     if (r.empty()) throw ApiError::badRequest("Unknown role " + (code ? *code : std::string("")), {{"roles", "Unknown role"}});
   }
@@ -63,7 +78,7 @@ void AdminService::ensureAdminRemains(Conn& c) const {
   auto n = c.exec(
                 "SELECT count(DISTINCT u.id) AS n FROM users u JOIN user_roles ur ON ur.user_id = u.id "
                 "JOIN role_permissions rp ON rp.role_id = ur.role_id JOIN permissions p ON p.id = rp.permission_id "
-                "WHERE u.is_active AND p.code = 'user.manage'")
+                "WHERE u.is_active AND p.code = 'user.manage' AND u.facility_id = cf_current_facility()")
                .first()
                .i64v("n");
   if (n == 0) throw ApiError::conflict("LAST_ADMIN", "At least one active user must retain user-management permission");
@@ -84,12 +99,12 @@ oatpp::Object<dto::UserDto> AdminService::createUser(const AuthContext& ctx, con
 
   return m_db->tx([&](Conn& c) {
     try {
-      auto id = c.exec("INSERT INTO users (username, full_name, email, phone, password_hash, must_change_password, is_active) "
-                       "VALUES ($1, $2, $3, $4, $5, true, coalesce($6, true)) RETURNING id",
+      auto id = c.exec("INSERT INTO users (username, full_name, email, phone, password_hash, must_change_password, is_active, facility_id) "
+                       "VALUES ($1, $2, $3, $4, $5, true, coalesce($6, true), cf_current_facility()) RETURNING id",
                        Params(username, fullName, email, opt(in->phone), hash, in->isActive))
                     .first()
                     .str("id");
-      setUserRoles(c, id, in->roles);
+      setUserRoles(ctx, c, id, in->roles);
       m_audit->record(c, ctx, AuditEvent{"USER_CREATE", "user", id, std::nullopt, "SUCCESS",
                                          {{"username", username}, {"roles", text::join(in->roles)}}});
       return getUser(c, id);
@@ -115,7 +130,7 @@ oatpp::Object<dto::UserDto> AdminService::updateUser(const AuthContext& ctx, con
     auto before = getUser(c, id);
     c.exec("UPDATE users SET full_name = $2, email = $3, phone = $4, is_active = coalesce($5, is_active) WHERE id = $1",
            Params(id, fullName, email, opt(in->phone), in->isActive));
-    if (in->roles) setUserRoles(c, id, in->roles);
+    if (in->roles) setUserRoles(ctx, c, id, in->roles);
     if (in->isActive && !*in->isActive) {
       c.exec("UPDATE user_sessions SET revoked_at = now(), revoke_reason = 'user_deactivated' "
              "WHERE user_id = $1 AND revoked_at IS NULL", Params(id));
@@ -131,12 +146,12 @@ oatpp::Object<dto::UserDto> AdminService::updateUser(const AuthContext& ctx, con
 }
 
 void AdminService::resetPassword(const AuthContext& ctx, const std::string& id, const std::string& newPassword) {
-  auto username = m_db->withConn([&](Conn& c) { return std::string(*getUser(c, id)->username); });
+  auto username = m_db->withConn([&](Conn& c) { return std::string(*getUser(c, id)->username); });  // facility-scoped
   AuthService::validatePasswordPolicy(newPassword, username);
   std::string hash = crypto::password::hash(newPassword);
   m_db->tx([&](Conn& c) {
     c.exec("UPDATE users SET password_hash = $2, must_change_password = true, failed_login_count = 0, "
-           "locked_until = NULL, password_changed_at = now() WHERE id = $1",
+           "locked_until = NULL, password_changed_at = now() WHERE id = $1 AND facility_id = cf_current_facility()",
            Params(id, hash));
     c.exec("UPDATE user_sessions SET revoked_at = now(), revoke_reason = 'password_reset' "
            "WHERE user_id = $1 AND revoked_at IS NULL", Params(id));
@@ -146,8 +161,9 @@ void AdminService::resetPassword(const AuthContext& ctx, const std::string& id, 
 
 // ---------------- Roles ----------------
 static const char* ROLE_SELECT =
-    "SELECT r.id, r.code, r.name, r.description, r.is_system, "
-    "  (SELECT count(*) FROM user_roles ur WHERE ur.role_id = r.id) AS user_count, "
+    "SELECT r.id, r.code, r.name, r.description, r.is_system, r.facility_id, "
+    "  (SELECT count(*) FROM user_roles ur JOIN users uu ON uu.id = ur.user_id "
+    "    WHERE ur.role_id = r.id AND uu.facility_id = cf_current_facility()) AS user_count, "
     "  coalesce((SELECT array_agg(p.code ORDER BY p.code) FROM role_permissions rp "
     "            JOIN permissions p ON p.id = rp.permission_id WHERE rp.role_id = r.id), '{}') AS perms "
     "FROM roles r ";
@@ -165,7 +181,9 @@ static oatpp::Object<dto::RoleDto> toRole(const Row& r) {
 }
 
 oatpp::Object<dto::RoleDto> AdminService::getRole(Conn& c, const std::string& id) const {
-  auto r = c.exec(std::string(ROLE_SELECT) + "WHERE r.id = $1", Params(id));
+  if (!text::isUuid(id)) throw ApiError::notFound("Role");
+  auto r = c.exec(std::string(ROLE_SELECT) + "WHERE r.id = $1 AND (r.facility_id IS NULL OR r.facility_id = cf_current_facility())",
+                  Params(id));
   if (r.empty()) throw ApiError::notFound("Role");
   return toRole(r.first());
 }
@@ -173,7 +191,8 @@ oatpp::Object<dto::RoleDto> AdminService::getRole(Conn& c, const std::string& id
 oatpp::Vector<oatpp::Object<dto::RoleDto>> AdminService::listRoles() const {
   return m_db->withConn([&](Conn& c) {
     auto out = oatpp::Vector<oatpp::Object<dto::RoleDto>>::createShared();
-    c.exec(std::string(ROLE_SELECT) + "ORDER BY r.is_system DESC, r.name").each([&](const Row& r) { out->push_back(toRole(r)); });
+    c.exec(std::string(ROLE_SELECT) + "WHERE (r.facility_id IS NULL OR r.facility_id = cf_current_facility()) "
+           "ORDER BY r.is_system DESC, r.name").each([&](const Row& r) { out->push_back(toRole(r)); });
     return out;
   });
 }
@@ -211,8 +230,12 @@ oatpp::Object<dto::RoleDto> AdminService::createRole(const AuthContext& ctx, con
   v.throwIfAny();
   return m_db->tx([&](Conn& c) {
     try {
-      auto id = c.exec("INSERT INTO roles (code, name, description) VALUES ($1, $2, $3) RETURNING id",
+      auto id = c.exec("INSERT INTO roles (code, name, description, facility_id) VALUES ($1, $2, $3, cf_current_facility()) "
+                       "RETURNING id",
                        Params(code, name, opt(in->description))).first().str("id");
+      if (in->permissions)
+        for (auto& p : *in->permissions)
+          if (p && *p == perm::PLATFORM_MANAGE) throw ApiError::badRequest("Clinic roles cannot include platform permissions");
       setRolePermissions(c, id, in->permissions);
       m_audit->record(c, ctx, AuditEvent{"ROLE_CREATE", "role", id, std::nullopt, "SUCCESS",
                                          {{"code", code}, {"permissions", text::join(in->permissions)}}});
@@ -228,6 +251,15 @@ oatpp::Object<dto::RoleDto> AdminService::updateRole(const AuthContext& ctx, con
                                                      const oatpp::Object<dto::RoleInputDto>& in) {
   return m_db->tx([&](Conn& c) {
     auto before = getRole(c, id);
+    bool shared = c.exec("SELECT facility_id IS NULL AS g FROM roles WHERE id = $1", Params(id)).first().boolv("g");
+    // System roles are shared by every clinic on this installation.
+    if (shared && !ctx.has(perm::PLATFORM_MANAGE))
+      throw ApiError(403, "SHARED_ROLE", "System roles are shared by all clinics; only a platform administrator can change them");
+    if (std::string(*before->code) == "PLATFORM_ADMIN" && in->permissions)
+      throw ApiError::conflict("PROTECTED_ROLE", "The platform administrator role cannot be edited");
+    if (!shared && in->permissions)
+      for (auto& p : *in->permissions)
+        if (p && *p == perm::PLATFORM_MANAGE) throw ApiError::badRequest("Clinic roles cannot include platform permissions");
     std::string name = trimmed(in->name);
     c.exec("UPDATE roles SET name = coalesce(nullif($2, ''), name), description = coalesce($3, description) WHERE id = $1",
            Params(id, name, opt(in->description)));
@@ -245,7 +277,20 @@ oatpp::Object<dto::RoleDto> AdminService::updateRole(const AuthContext& ctx, con
 // ---------------- Settings ----------------
 oatpp::Object<dto::SettingsDto> AdminService::getSettings() const {
   return m_db->withConn([&](Conn& c) {
-    auto r = c.exec("SELECT *, duplicate_rules::text AS rules FROM clinic_settings WHERE id = 1").first();
+    // Deployment-wide settings come from clinic_settings; clinic identity from the
+    // caller's facility.
+    auto r = c.exec("SELECT s.timezone, s.patient_id_prefix, s.invoice_prefix, s.default_slot_minutes, "
+                    "  s.session_idle_minutes, s.duplicate_rules::text AS rules, greatest(s.updated_at, f.updated_at) AS updated_at, "
+                    "  f.name AS clinic_name, f.address, f.city, f.state, f.pincode, f.phone, f.email, "
+                    "  f.registration_number, f.gstin, f.hfr_id "
+                    "FROM clinic_settings s JOIN facilities f ON f.id = cf_current_facility() WHERE s.id = 1");
+    if (r.empty()) throw ApiError::notFound("Clinic");
+    return toSettings(r.first());
+  });
+}
+
+static oatpp::Object<dto::SettingsDto> toSettingsImpl(const Row& r) {
+  {
     auto s = dto::SettingsDto::createShared();
     s->clinicName = r.s("clinic_name");
     s->address = r.s("address");
@@ -273,8 +318,9 @@ oatpp::Object<dto::SettingsDto> AdminService::getSettings() const {
     d->weightGender = j["weights"].value("gender", 0);
     s->duplicateRules = d;
     return s;
-  });
+  }
 }
+oatpp::Object<dto::SettingsDto> AdminService::toSettings(const Row& r) { return toSettingsImpl(r); }
 
 oatpp::Object<dto::SettingsDto> AdminService::updateSettings(const AuthContext& ctx,
                                                              const oatpp::Object<dto::SettingsDto>& in) {
@@ -306,16 +352,26 @@ oatpp::Object<dto::SettingsDto> AdminService::updateSettings(const AuthContext& 
   }
   v.throwIfAny();
   m_db->tx([&](Conn& c) {
-    c.exec("UPDATE clinic_settings SET clinic_name = $1, address = $2, city = $3, state = $4, pincode = $5, phone = $6, "
-           "email = $7, registration_number = $8, gstin = $9, hfr_id = $10, "
-           "patient_id_prefix = coalesce($11, patient_id_prefix), invoice_prefix = coalesce($12, invoice_prefix), "
-           "default_slot_minutes = coalesce($13, default_slot_minutes), "
-           "session_idle_minutes = coalesce($14, session_idle_minutes), "
-           "duplicate_rules = coalesce($15::jsonb, duplicate_rules), updated_at = now(), updated_by = $16 WHERE id = 1",
+    c.exec("UPDATE facilities SET name = $1, address = $2, city = $3, state = $4, pincode = $5, phone = $6, "
+           "email = $7, registration_number = $8, gstin = $9, hfr_id = $10 WHERE id = cf_current_facility()",
            Params(name, opt(in->address), opt(in->city), opt(in->state), pin, opt(in->phone), em,
-                  opt(in->registrationNumber), opt(in->gstin), opt(in->hfrId), opt(in->patientIdPrefix),
-                  opt(in->invoicePrefix), in->defaultSlotMinutes, in->sessionIdleMinutes, rules, ctx.userId));
-    m_audit->record(c, ctx, AuditEvent{"SETTINGS_UPDATE", "clinic_settings", "1", std::nullopt, "SUCCESS",
+                  opt(in->registrationNumber), opt(in->gstin), opt(in->hfrId)));
+    // Installation-wide settings: shared across clinics, so only the primary clinic's
+    // administrators or a platform administrator may change them.
+    bool installationWide = in->patientIdPrefix || in->invoicePrefix || in->defaultSlotMinutes || in->sessionIdleMinutes || rules;
+    if (installationWide && !ctx.has(perm::PLATFORM_MANAGE) && ctx.facilityId != "00000000-0000-4000-8000-000000000001") {
+      throw ApiError(403, "INSTALLATION_SETTING", "ID prefixes, slot length, idle timeout and duplicate rules are installation-wide; "
+                                                  "ask the platform administrator to change them");
+    }
+    c.exec("UPDATE clinic_settings SET "
+           "clinic_name = CASE WHEN cf_current_facility() = '00000000-0000-4000-8000-000000000001'::uuid THEN $1 ELSE clinic_name END, "
+           "patient_id_prefix = coalesce($2, patient_id_prefix), invoice_prefix = coalesce($3, invoice_prefix), "
+           "default_slot_minutes = coalesce($4::int, default_slot_minutes), "
+           "session_idle_minutes = coalesce($5::int, session_idle_minutes), "
+           "duplicate_rules = coalesce($6::jsonb, duplicate_rules), updated_at = now(), updated_by = $7 WHERE id = 1",
+           Params(name, opt(in->patientIdPrefix), opt(in->invoicePrefix), in->defaultSlotMinutes, in->sessionIdleMinutes,
+                  rules, ctx.userId));
+    m_audit->record(c, ctx, AuditEvent{"SETTINGS_UPDATE", "facility", ctx.facilityId, std::nullopt, "SUCCESS",
                                        {{"duplicateRulesChanged", rules.has_value()}}});
   });
   return getSettings();

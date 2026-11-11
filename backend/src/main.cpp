@@ -13,6 +13,7 @@
 #include "config/Config.hpp"
 #include "controller/AbdmController.hpp"
 #include "controller/AdminController.hpp"
+#include "controller/FacilityController.hpp"
 #include "controller/AuthController.hpp"
 #include "controller/BillingController.hpp"
 #include "controller/ClinicalController.hpp"
@@ -72,6 +73,7 @@ static void run() {
   auto auth = std::make_shared<cf::AuthService>(db, audit, cfg);
   auth->bootstrapAdmin(cfg);
   auto admin = std::make_shared<cf::AdminService>(db, audit);
+  auto facilities = std::make_shared<cf::FacilityService>(db, audit);
   auto notifications = std::make_shared<cf::NotificationService>(db, std::make_shared<cf::LogNotificationChannel>());
   auto patients = std::make_shared<cf::PatientService>(db, audit, cipher);
   auto scheduling = std::make_shared<cf::SchedulingService>(db, audit, notifications);
@@ -98,6 +100,7 @@ static void run() {
   bool tp = cfg.trustProxyHeaders;
   addController(std::make_shared<cf::AuthController>(om, auth, tp));
   addController(std::make_shared<cf::AdminController>(om, auth, tp, admin, audit, db, cfg.abdmMode));
+  addController(std::make_shared<cf::FacilityController>(om, auth, tp, facilities));
   addController(std::make_shared<cf::PatientController>(om, auth, tp, patients, clinical, scheduling, billing));
   addController(std::make_shared<cf::SchedulingController>(om, auth, tp, scheduling));
   addController(std::make_shared<cf::ClinicalController>(om, auth, tp, clinical));
@@ -125,6 +128,8 @@ static void run() {
 
   // Background worker: reminders, consent expiry, ABDM retries.
   std::thread worker([&] {
+    // Background jobs span all clinics (each row carries its own facility_id).
+    cf::ScopedFacility workerScope("", true);
     int elapsed = cfg.workerIntervalSeconds;
     while (g_running) {
       if (elapsed >= cfg.workerIntervalSeconds) {

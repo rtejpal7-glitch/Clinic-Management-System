@@ -96,9 +96,12 @@ json FhirMapper::practitionerFrom(Conn& c, const std::string& id) const {
 }
 
 json FhirMapper::organizationFrom(Conn& c) const {
-  auto s = c.exec("SELECT * FROM clinic_settings WHERE id = 1").first();
-  // Deterministic id for the single clinic organization.
-  json res = {{"resourceType", "Organization"}, {"id", "00000000-0000-4000-8000-000000000001"}, {"meta", meta("Organization")},
+  // The Organization is the clinic (facility) of the current request.
+  auto rs = c.exec("SELECT id, name AS clinic_name, hfr_id, phone FROM facilities "
+                   "WHERE id = coalesce(cf_current_facility(), '00000000-0000-4000-8000-000000000001'::uuid)");
+  if (rs.empty()) throw ApiError::notFound("Clinic");
+  auto s = rs.first();
+  json res = {{"resourceType", "Organization"}, {"id", s.str("id")}, {"meta", meta("Organization")},
               {"name", s.str("clinic_name")}};
   if (!s.isNull("hfr_id")) res["identifier"] = json::array({{{"system", SYS_HFR}, {"value", s.str("hfr_id")}}});
   if (!s.isNull("phone")) res["telecom"] = json::array({{{"system", "phone"}, {"value", s.str("phone")}}});

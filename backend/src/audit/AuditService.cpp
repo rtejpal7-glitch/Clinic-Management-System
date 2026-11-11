@@ -64,7 +64,9 @@ void AuditService::recordStandalone(const AuditActor& actor, const AuditEvent& e
 }
 
 oatpp::Object<dto::AuditPageDto> AuditService::list(const AuditQuery& q) const {
-  std::string where = " WHERE 1=1";
+  std::string where = q.includeInstallationLevel
+                          ? " WHERE (facility_id = cf_current_facility() OR facility_id IS NULL)"
+                          : " WHERE facility_id = cf_current_facility()";
   Params p;
   int n = 0;
   auto add = [&](const std::optional<std::string>& v, const std::string& clause) {

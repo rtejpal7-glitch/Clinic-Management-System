@@ -21,6 +21,10 @@ struct AuthContext {
   std::vector<std::string> roles;
   std::set<std::string> permissions;
   std::optional<std::string> doctorId;  // set when the user has a doctor profile
+  std::string facilityId;    // tenant (clinic) the user belongs to
+  std::string facilityCode;
+  std::string facilityName;
+  std::string specialty;     // e.g. DERMATOLOGY — selects specialty consultation modules
   bool mustChangePassword = false;
   int sessionIdleMinutes = 30;
   RequestMeta meta;
@@ -65,6 +69,7 @@ inline const std::string ABDM_READ = "abdm.read";
 inline const std::string ABDM_LINK = "abdm.link";
 inline const std::string ABDM_CONSENT = "abdm.consent";
 inline const std::string FHIR_EXPORT = "fhir.export";
+inline const std::string PLATFORM_MANAGE = "platform.manage";
 // Pseudo-permission: any authenticated user
 inline const std::string AUTHENTICATED = "";
 }  // namespace perm
