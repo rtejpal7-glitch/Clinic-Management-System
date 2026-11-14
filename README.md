@@ -25,7 +25,7 @@ React 19 + TypeScript (esbuild) · C++17 + Oat++ 1.3 (REST, Swagger) · PostgreS
 ## Quick start (Docker)
 
 ```bash
-./scripts/generate-env.sh          # creates .env with random secrets and an admin password
+./scripts/generate-env.sh          # creates .env (Windows: see RUN_ON_WINDOWS.md)
 docker compose up --build          # PostgreSQL + API + web client
 # Web app:  http://localhost:8080        Swagger UI: http://localhost:8080/swagger/ui
 python3 scripts/seed_demo.py --api http://localhost:8080/api/v1 --admin-pass "<admin password from .env>"
