@@ -8,11 +8,11 @@
 Open the `clinicflow` folder in VS Code, then **Terminal → New Terminal** (PowerShell).
 
 ```powershell
-# 1. Remove any database left by an earlier ClinicFlow version (deletes old demo data)
-docker compose down -v
-
-# 2. Create the settings file (only if .env does not exist yet)
+# 1. Create the settings file (only if .env does not exist yet). Compose needs it for every command.
 powershell -ExecutionPolicy Bypass -File scripts\generate-env.ps1
+
+# 2. Remove any database left by an earlier ClinicFlow version (deletes old demo data)
+docker compose down -v
 
 # 3. Build and start (first build: 10-20 minutes). Leave this terminal running.
 docker compose up --build
