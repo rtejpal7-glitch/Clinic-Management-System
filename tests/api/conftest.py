@@ -57,6 +57,9 @@ class Client:
     def put(self, path, json=None, **kw):
         return requests.put(API + path, json=json if json is not None else {}, headers=self._h(), timeout=20, **kw)
 
+    def delete(self, path, **kw):
+        return requests.delete(API + path, headers=self._h(), timeout=20, **kw)
+
 
 def login(username, password):
     r = requests.post(API + "/auth/login", json={"username": username, "password": password}, timeout=20)

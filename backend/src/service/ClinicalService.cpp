@@ -445,6 +445,8 @@ oatpp::Vector<oatpp::Object<dto::TimelineEntryDto>> ClinicalService::timeline(co
     if (c.exec("SELECT 1 FROM patients WHERE id = $1", Params(patientId)).empty()) throw ApiError::notFound("Patient");
     auto out = oatpp::Vector<oatpp::Object<dto::TimelineEntryDto>>::createShared();
     c.exec("SELECT c.id, c.started_at, c.status, c.chief_complaint, c.follow_up_date::text AS fud, d.display_name, "
+           "  (SELECT count(*) FROM handwritten_note_pages h WHERE h.consultation_id = c.id AND h.stroke_count > 0) AS hw_pages, "
+           "  EXISTS (SELECT 1 FROM handwriting_transcriptions t WHERE t.consultation_id = c.id AND t.status = 'ACCEPTED') AS hw_tx, "
            "  coalesce((SELECT array_agg(coalesce(x.code || ' ', '') || x.display ORDER BY x.sort_order) FROM consultation_diagnoses x "
            "            WHERE x.consultation_id = c.id), '{}') AS dx, "
            "  coalesce((SELECT array_agg(i.medicine_name || coalesce(' ' || i.strength, '') || ' — ' || i.dose || ' ' || i.frequency "
@@ -466,6 +468,8 @@ oatpp::Vector<oatpp::Object<dto::TimelineEntryDto>> ClinicalService::timeline(co
           t->medicines = r.strArray("meds");
           t->investigations = r.strArray("inv");
           t->followUpDate = r.s("fud");
+          t->handwrittenPages = r.i64("hw_pages");
+          t->handwritingTranscribed = r.b("hw_tx");
           if (!r.isNull("consultation_id")) t->vitals = vitalsFromRow(r);
           out->push_back(t);
         });

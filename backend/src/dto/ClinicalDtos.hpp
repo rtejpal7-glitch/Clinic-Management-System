@@ -162,6 +162,8 @@ class TimelineEntryDto : public oatpp::DTO {
   DTO_FIELD(Vector<String>, investigations);
   DTO_FIELD(Object<VitalsDto>, vitals);
   DTO_FIELD(String, followUpDate);
+  DTO_FIELD(Int64, handwrittenPages);       // pages of handwritten notes saved with this visit
+  DTO_FIELD(Boolean, handwritingTranscribed);  // a doctor-approved transcription exists
 };
 
 // ---------- Catalogues ----------

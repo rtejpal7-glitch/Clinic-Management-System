@@ -21,6 +21,9 @@
 #include "derm/DermVocabulary.hpp"
 #include "derm/MedicationSafety.hpp"
 #include "derm/PatternStats.hpp"
+#include "derm/ClinicalTextExtractor.hpp"
+#include "hwr/HandwritingRecognizer.hpp"
+#include "hwr/HttpsClient.hpp"
 
 namespace {
 int g_failed = 0, g_passed = 0;
@@ -394,6 +397,100 @@ TEST(patterns_network_disclosure_controls) {
   for (int i = 0; i < 20; ++i) dom.push_back(pcase("A", "d" + std::to_string(i % 4), "f1"));
   for (int i = 0; i < 3; ++i) dom.push_back(pcase("A", "x" + std::to_string(i), "f2"));
   CHECK_EQ(cf::derm::summarizeNetwork(dom)["status"].get<std::string>(), std::string("INSUFFICIENT_DATA"));
+}
+
+// ---------------- Handwritten note extraction ----------------
+static std::vector<cf::derm::KnownMedicine> testMeds() {
+  return {{"FEXOFENADINE", "Fexofenadine"}, {"LULICONAZOLE", "Luliconazole"}, {"BENZOYL_PEROXIDE", "Benzoyl Peroxide"},
+          {"TERBINAFINE", "Terbinafine"}, {"EMOLLIENT", "Emollient (Light Liquid Paraffin + White Soft Paraffin)"}};
+}
+static bool hasCode(const json& arr, const std::string& code) {
+  for (auto& x : arr) if (x["code"] == code) return true;
+  return false;
+}
+
+TEST(extract_structured_note_with_sections_and_shorthand) {
+  std::string note =
+      "C/o itchy red raised wheals on arms and back x 5/7\n"
+      "No fever. No lip swelling\n"
+      "O/E multiple erythematous wheals, generalised\n"
+      "Imp: ?urticaria\n"
+      "Rx tab fexofenadine 120mg OD x 2 weeks";
+  auto r = cf::derm::extractClinicalText(note, testMeds());
+  auto& a = r["assessment"];
+  CHECK(hasCode(a["symptoms"], "ITCHING"));
+  CHECK(!hasCode(a["symptoms"], "FEVER"));
+  CHECK(hasCode(r["negatives"], "FEVER"));
+  CHECK(hasCode(r["negatives"], "LIP_TONGUE_SWELLING"));
+  CHECK(hasCode(a["lesionTypes"], "WHEAL"));
+  CHECK(hasCode(a["bodySites"], "ARMS") && hasCode(a["bodySites"], "BACK"));
+  CHECK(hasCode(a["colours"], "ERYTHEMATOUS"));
+  CHECK_EQ(a["distribution"]["code"].get<std::string>(), std::string("GENERALISED"));
+  CHECK_EQ(a["duration"]["value"].get<int>(), 5);
+  CHECK_EQ(a["duration"]["unit"].get<std::string>(), std::string("DAYS"));  // 5/7 = five days
+  CHECK_EQ(a["problemType"]["code"].get<std::string>(), std::string("HIVES_SWELLING"));
+  CHECK_EQ(r["diagnoses"][0]["code"].get<std::string>(), std::string("L50.9"));
+  CHECK_EQ(r["diagnoses"][0]["writtenAs"].get<std::string>(), std::string("query"));
+  CHECK_EQ(r["medicines"][0]["genericCode"].get<std::string>(), std::string("FEXOFENADINE"));
+  CHECK_EQ(r["medicines"][0]["frequency"].get<std::string>(), std::string("Once daily"));
+  CHECK_EQ(r["medicines"][0]["durationDays"].get<int>(), 14);
+  CHECK(r["sections"]["complaint"].get<std::string>().find("itchy") != std::string::npos);
+  CHECK(r["sections"]["examination"].get<std::string>().find("wheals") != std::string::npos);
+  CHECK(r["sections"]["plan"].get<std::string>().find("fexofenadine") != std::string::npos);
+}
+
+TEST(extract_tolerates_recognition_errors_and_suggests_corrections) {
+  // typical handwriting-recognition slips: "itcy", "erythematus", "urticarla", "fexofenadlne"
+  auto r = cf::derm::extractClinicalText("annular scaly plaque on waist, erythematus edge, 3 weeks\n?tinea corporis\nluliconazol cream", testMeds());
+  CHECK(hasCode(r["assessment"]["colours"], "ERYTHEMATOUS"));
+  bool corrected = false;
+  for (auto& c : r["corrections"]) if (c["original"] == "erythematus") corrected = true;
+  CHECK(corrected);
+  CHECK_EQ(r["assessment"]["configuration"]["code"].get<std::string>(), std::string("ANNULAR"));
+  CHECK_EQ(r["assessment"]["duration"]["unit"].get<std::string>(), std::string("WEEKS"));
+  CHECK_EQ(r["diagnoses"][0]["code"].get<std::string>(), std::string("B35.4"));  // longest synonym wins over "tinea"
+  CHECK_EQ(r["medicines"][0]["genericCode"].get<std::string>(), std::string("LULICONAZOLE"));
+  CHECK(r["medicines"][0]["fuzzy"].get<bool>());
+}
+
+TEST(extract_without_headings_and_negated_diagnosis) {
+  auto r = cf::derm::extractClinicalText("Pimples and blackheads on face since 6 months, mild. Not scabies. Not pregnant.", testMeds());
+  CHECK_EQ(r["assessment"]["problemType"]["code"].get<std::string>(), std::string("ACNE_BREAKOUTS"));
+  CHECK(hasCode(r["assessment"]["lesionTypes"], "COMEDONE"));
+  CHECK_EQ(r["assessment"]["severity"]["code"].get<std::string>(), std::string("MILD"));
+  CHECK_EQ(r["assessment"]["duration"]["value"].get<int>(), 6);
+  CHECK(r["diagnoses"].empty());
+  CHECK_EQ(r["excludedDiagnoses"][0]["code"].get<std::string>(), std::string("B86"));
+  CHECK_EQ(r["assessment"]["pregnancyStatus"]["code"].get<std::string>(), std::string("NOT_PREGNANT"));
+  CHECK(r["sections"].contains("complaint"));
+}
+
+TEST(extract_does_not_invent_findings) {
+  auto r = cf::derm::extractClinicalText("Patient came back for review. Advised to continue.", testMeds());
+  CHECK(r["assessment"]["symptoms"].empty() && r["assessment"]["lesionTypes"].empty());
+  CHECK(r["diagnoses"].empty() && r["medicines"].empty());
+  CHECK(r["assessment"]["duration"].is_null());
+  auto e = cf::derm::extractClinicalText("   ", testMeds());
+  CHECK(!e["warnings"].empty());
+  CHECK_EQ(cf::derm::editDistance("urticaria", "urticarla"), 1);
+}
+
+TEST(recognizer_response_parsing) {
+  auto ok = cf::hwr::GoogleVisionRecognizer::parseResponse(200, R"({"responses":[{"fullTextAnnotation":{"text":"c/o itchy wheals\n"}}]})");
+  CHECK(ok.ok && ok.text == "c/o itchy wheals\n");
+  auto err = cf::hwr::GoogleVisionRecognizer::parseResponse(200, R"({"responses":[{"error":{"code":3,"message":"Bad image data."}}]})");
+  CHECK(!err.ok && err.error.find("Bad image data") != std::string::npos);
+  auto denied = cf::hwr::GoogleVisionRecognizer::parseResponse(403, R"({"error":{"code":403,"message":"API key not valid"}})");
+  CHECK(!denied.ok && denied.error.find("403") != std::string::npos);
+  auto empty = cf::hwr::GoogleVisionRecognizer::parseResponse(200, R"({"responses":[{}]})");
+  CHECK(empty.ok && empty.text.empty());
+  auto h = cf::hwr::HttpRecognizer::parseResponse(200, R"({"text":"no fever"})");
+  CHECK(h.ok && h.text == "no fever");
+  CHECK(!cf::hwr::HttpRecognizer::parseResponse(200, R"({"words":[]})").ok);
+  CHECK(!cf::hwr::HttpRecognizer::parseResponse(500, "oops").ok);
+  CHECK_EQ(cf::hwr::decodeChunked("4\r\nWiki\r\n5\r\npedia\r\n0\r\n\r\n"), std::string("Wikipedia"));
+  cf::hwr::DisabledRecognizer d;
+  CHECK(!d.enabled() && !d.sendsDataExternally());
 }
 
 int main() {

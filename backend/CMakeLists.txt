@@ -31,7 +31,7 @@ list(REMOVE_ITEM CORE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp)
 add_library(clinicflow-core STATIC ${CORE_SOURCES})
 target_include_directories(clinicflow-core PUBLIC src ${PQ_INCLUDE} ${ARGON2_INCLUDE_DIR} ${NLOHMANN_INCLUDE_DIR})
 target_link_libraries(clinicflow-core PUBLIC
-  oatpp::oatpp oatpp::oatpp-swagger ${PQ_LIB} OpenSSL::Crypto ${ARGON2_LIBRARY} Threads::Threads)
+  oatpp::oatpp oatpp::oatpp-swagger ${PQ_LIB} OpenSSL::SSL OpenSSL::Crypto ${ARGON2_LIBRARY} Threads::Threads)
 target_compile_options(clinicflow-core PRIVATE -Wall -Wextra -Wno-unused-parameter)
 
 add_executable(clinicflow-server src/main.cpp)

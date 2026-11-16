@@ -40,9 +40,10 @@ class BodyCaptureInterceptor : public oatpp::web::server::interceptor::RequestIn
   std::shared_ptr<OutgoingResponse> intercept(const std::shared_ptr<IncomingRequest>& request) override {
     std::string path = request->getStartingLine().path.toString();
     std::string method = request->getStartingLine().method.toString();
-    bool photo = method == "POST" && path.size() > 7 && path.compare(path.size() - 7, 7, "/photos") == 0;
+    bool photo = (method == "POST" && path.size() > 7 && path.compare(path.size() - 7, 7, "/photos") == 0) ||
+                 (method == "PUT" && path.find("/handwriting/pages/") != std::string::npos);
     const v_int64 limit = photo ? MAX_PHOTO_BODY : MAX_BODY;
-    const char* limitText = photo ? "Request body exceeds 9 MB" : "Request body exceeds 1 MB";
+    const char* limitText = photo ? "Request body exceeds 9 MB" : "Request body exceeds 1 MB";  // photos and handwriting pages: 9 MB
     auto len = request->getHeader("Content-Length");
     if (len) {
       v_int64 n = 0;
