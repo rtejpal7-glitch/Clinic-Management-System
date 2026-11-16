@@ -43,5 +43,5 @@ ENV MIGRATIONS_DIR=/app/migrations \
     PORT=8000
 USER clinicflow
 EXPOSE 8000
-HEALTHCHECK --interval=15s --timeout=3s --retries=5 CMD curl -fs http://localhost:8000/api/v1/health || exit 1
+HEALTHCHECK --interval=15s --timeout=3s --retries=5 CMD curl -fs "http://localhost:${PORT:-8000}/api/v1/health" || exit 1
 ENTRYPOINT ["/app/clinicflow-server"]

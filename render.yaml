@@ -1,0 +1,63 @@
+# Render Blueprint: ClinicFlow API + PostgreSQL (docs/DEPLOY_RENDER.md).
+# The web client is hosted on Vercel (frontend/vercel.json) and reaches this API
+# through a rewrite, so browsers see a single origin.
+#
+# Free instances are for demos with synthetic data: the API sleeps after 15 minutes
+# idle (about a minute to wake) and a free database expires after 30 days.
+
+databases:
+  - name: clinicflow-db
+    plan: free
+    region: singapore          # closest Render region to India
+    databaseName: clinicflow
+    user: clinicflow_owner
+    postgresMajorVersion: "16"
+    ipAllowList: []            # no access from the internet; only Render services
+
+services:
+  - type: web
+    name: clinicflow-api
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /api/v1/health
+    autoDeployTrigger: commit   # redeploy on every push to the connected branch
+    buildFilter:
+      paths:
+        - backend/**
+        - render.yaml
+    envVars:
+      # Hosted Postgres has no superuser. The server uses this owner login for
+      # migrations and creates the least-privilege role clinicflow_app itself.
+      - key: MIGRATION_DATABASE_URL
+        fromDatabase:
+          name: clinicflow-db
+          property: connectionString
+      - key: APP_DB_PASSWORD
+        generateValue: true
+      # 256-bit keys for field encryption and blind indexes. Never regenerate them
+      # once data exists: encrypted fields would become unreadable.
+      - key: DATA_ENCRYPTION_KEY
+        generateValue: true
+      - key: BLIND_INDEX_KEY
+        generateValue: true
+      # You type this when creating the Blueprint: 10+ characters, letters and
+      # digits, and it must not contain the word "admin".
+      - key: BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
+      - key: BOOTSTRAP_ADMIN_USERNAME
+        value: admin
+      - key: APP_ENV
+        value: demo
+      - key: ABDM_MODE
+        value: mock
+      - key: TRUST_PROXY_HEADERS
+        value: "true"
+      - key: PORT
+        value: "8000"
+      - key: DB_POOL_SIZE
+        value: "5"
+      - key: HWR_PROVIDER
+        value: none

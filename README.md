@@ -39,7 +39,7 @@ Demo accounts (password `Clinic-Demo-2026`): `dr.meera`, `dr.arjun`, `reception`
 
 | Suite | Count | Command |
 |---|---|---|
-| Backend unit (C++) | 33 | `ctest --test-dir backend/build` |
+| Backend unit (C++) | 34 | `ctest --test-dir backend/build` |
 | API integration (pytest, real DB) | 115 | `pytest tests/api` |
 | Frontend unit | 19 | `cd frontend && npm test` |
 | End-to-end UI (Playwright) | 20 + 10 + 9 | `cd frontend && npm run test:e2e && npm run test:e2e:derm && npm run test:e2e:handwriting` |
@@ -58,7 +58,8 @@ See [docs/TESTING.md](docs/TESTING.md).
 | [docs/ABDM_INTEGRATION.md](docs/ABDM_INTEGRATION.md) | Interoperability architecture, mock workflows, path to live integration |
 | [docs/DERMATOLOGY.md](docs/DERMATOLOGY.md) | Dermatology module, decision-support logic, privacy controls, limitations |
 | [docs/HANDWRITING.md](docs/HANDWRITING.md) | Handwritten notes on iPad: workflow, recognition providers, privacy, real-iPad checklist |
-| [docs/DEPLOY_VERCEL.md](docs/DEPLOY_VERCEL.md) | Hosting the web client on Vercel with the backend elsewhere |
+| [docs/DEPLOY_RENDER.md](docs/DEPLOY_RENDER.md) | Put ClinicFlow online: API and database on Render (`render.yaml`), website on Vercel, step by step |
+| [docs/DEPLOY_VERCEL.md](docs/DEPLOY_VERCEL.md) | Vercel details, and hosting the backend somewhere other than Render |
 | [docs/NABH_TRACEABILITY.md](docs/NABH_TRACEABILITY.md) | Requirement traceability matrix (51 objective elements, verified against the standard) |
 | [docs/TESTING.md](docs/TESTING.md) | Test strategy and execution guide |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Known limitations and future development |

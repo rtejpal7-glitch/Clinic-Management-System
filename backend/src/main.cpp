@@ -24,6 +24,7 @@
 #include "controller/SchedulingController.hpp"
 #include "db/Db.hpp"
 #include "db/Migrator.hpp"
+#include "db/RoleSetup.hpp"
 #include "oatpp-swagger/Controller.hpp"
 #include "oatpp/network/Server.hpp"
 #include "oatpp/network/tcp/server/ConnectionProvider.hpp"
@@ -67,7 +68,12 @@ static void run() {
   auto cfg = cf::Config::fromEnv();
   OATPP_LOGI("ClinicFlow", "Starting (env=%s, abdm=%s)", cfg.appEnv.c_str(), cfg.abdmMode.c_str());
 
+  if (cfg.databaseUrl.empty()) {
+    cf::roles::ensureAppRole(cfg.migrationDatabaseUrl, cfg.appDbPassword);
+    cfg.databaseUrl = cf::withCredentials(cfg.migrationDatabaseUrl, cf::roles::kAppRole, cfg.appDbPassword);
+  }
   if (cfg.runMigrations) cf::Migrator::run(cfg.migrationDatabaseUrl, cfg.migrationsDir);
+  cf::roles::checkRuntimeRole(cfg.databaseUrl, cfg.allowSharedDbRole);
   auto db = std::make_shared<cf::Db>(cfg.databaseUrl, cfg.dbPoolSize);
   auto cipher = std::make_shared<cf::crypto::FieldCipher>(cfg.dataEncryptionKeyB64, cfg.blindIndexKeyB64);
 

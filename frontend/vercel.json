@@ -11,15 +11,7 @@
       "destination": "https://clinicflow-api.example.invalid/api/:path*"
     },
     {
-      "source": "/swagger/:path*",
-      "destination": "https://clinicflow-api.example.invalid/swagger/:path*"
-    },
-    {
-      "source": "/api-docs/:path*",
-      "destination": "https://clinicflow-api.example.invalid/api-docs/:path*"
-    },
-    {
-      "source": "/((?!api/|swagger/|api-docs/).*)",
+      "source": "/((?!api/).*)",
       "destination": "/index.html"
     }
   ],

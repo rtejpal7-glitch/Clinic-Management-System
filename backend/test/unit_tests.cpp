@@ -24,6 +24,7 @@
 #include "derm/ClinicalTextExtractor.hpp"
 #include "hwr/HandwritingRecognizer.hpp"
 #include "hwr/HttpsClient.hpp"
+#include "db/RoleSetup.hpp"
 
 namespace {
 int g_failed = 0, g_passed = 0;
@@ -491,6 +492,19 @@ TEST(recognizer_response_parsing) {
   CHECK_EQ(cf::hwr::decodeChunked("4\r\nWiki\r\n5\r\npedia\r\n0\r\n\r\n"), std::string("Wikipedia"));
   cf::hwr::DisabledRecognizer d;
   CHECK(!d.enabled() && !d.sendsDataExternally());
+}
+
+
+TEST(hosted_db_url_credentials) {
+  // Render-style internal URL without a port, and a password with URL-reserved characters
+  std::string u = cf::withCredentials("postgresql://owner:p%40ss@dpg-abc123-a/clinicflow_x1y2", "clinicflow_app", "a+b/c=d@e:f");
+  CHECK(u == "postgresql://clinicflow_app:a%2Bb%2Fc%3Dd%40e%3Af@dpg-abc123-a/clinicflow_x1y2");
+  CHECK(cf::withCredentials("postgres://h.example.com:5432/db?sslmode=require", "u", "p") == "postgres://u:p@h.example.com:5432/db?sslmode=require");
+  // '@' inside the query string is not mistaken for the credential separator
+  CHECK(cf::withCredentials("postgresql://o:x@h/db?application_name=a@b", "u", "p") == "postgresql://u:p@h/db?application_name=a@b");
+  bool threw = false;
+  try { cf::withCredentials("host=localhost dbname=x", "u", "p"); } catch (const std::exception&) { threw = true; }
+  CHECK(threw);
 }
 
 int main() {

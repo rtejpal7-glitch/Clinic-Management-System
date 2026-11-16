@@ -15,6 +15,8 @@ struct Config {
   int port = 8000;
   std::string databaseUrl;           // least-privilege runtime role
   std::string migrationDatabaseUrl;  // schema owner role (migrations only)
+  std::string appDbPassword;         // hosted Postgres: create clinicflow_app with this password (RoleSetup)
+  bool allowSharedDbRole = false;    // demo only: API may run as the schema owner
   int dbPoolSize = 8;
   std::string migrationsDir;
   std::string dataEncryptionKeyB64;  // AES-256-GCM key for field-level encryption
@@ -43,8 +45,15 @@ struct Config {
     c.appEnv = env("APP_ENV", "development");
     c.host = env("HOST", "0.0.0.0");
     c.port = std::stoi(env("PORT", "8000"));
-    c.databaseUrl = required("DATABASE_URL");
-    c.migrationDatabaseUrl = env("MIGRATION_DATABASE_URL", c.databaseUrl);
+    c.appDbPassword = env("APP_DB_PASSWORD");
+    c.allowSharedDbRole = env("ALLOW_SHARED_DB_ROLE", "false") == "true";
+    if (!c.appDbPassword.empty() && env("DATABASE_URL").empty()) {
+      // Hosted Postgres: DATABASE_URL is derived after RoleSetup creates the runtime role.
+      c.migrationDatabaseUrl = required("MIGRATION_DATABASE_URL");
+    } else {
+      c.databaseUrl = required("DATABASE_URL");
+      c.migrationDatabaseUrl = env("MIGRATION_DATABASE_URL", c.databaseUrl);
+    }
     c.dbPoolSize = std::stoi(env("DB_POOL_SIZE", "8"));
     c.migrationsDir = env("MIGRATIONS_DIR", "./migrations");
     c.dataEncryptionKeyB64 = required("DATA_ENCRYPTION_KEY");

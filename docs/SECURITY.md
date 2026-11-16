@@ -46,7 +46,7 @@ This document lists the security controls in the PoC, where they live in the cod
 | Backups | — | Encrypted `pg_dump`/WAL archives (for example `pgBackRest` with repository encryption), stored off-site, restore tested regularly. |
 | Caching | `Cache-Control: no-store` on all API responses. `index.html` not cached. | |
 | Secrets | Only from the environment. `.env` is git-ignored. `generate-env.sh` creates random values with mode 600. | Secret manager, rotation. |
-| Least privilege in DB | API connects as `clinicflow_app` (no DDL, no UPDATE/DELETE on audit, payments or addenda). Migrations use `clinicflow_owner`. | Separate credentials per environment. |
+| Least privilege in DB | API connects as `clinicflow_app` (no DDL, no UPDATE/DELETE on audit, payments or addenda). Migrations use `clinicflow_owner`. On hosted PostgreSQL the API creates `clinicflow_app` itself (`APP_DB_PASSWORD`). At start-up it refuses to run as a superuser, a BYPASSRLS login, or the schema owner (unless `ALLOW_SHARED_DB_ROLE=true`, demo only). | Separate credentials per environment. |
 | Logs | Application logs avoid PHI (the notification log masks phone numbers). | Central log collection with access control. |
 
 ## Application security
