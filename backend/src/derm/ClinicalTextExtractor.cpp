@@ -407,10 +407,11 @@ json extractClinicalText(const std::string& text, const std::vector<KnownMedicin
   std::sort(aliases.begin(), aliases.end(), [](const MedAlias& a, const MedAlias& b) { return a.w.size() > b.w.size(); });
   static const std::regex strengthRe(R"(\b(\d+(?:\.\d+)?)\s*(mg|mcg|g|gm|ml|%|iu)\b)", std::regex::icase);
   static const std::vector<std::pair<std::regex, std::string>> freqs = {
-      {std::regex(R"(\b(od|once daily|once a day|qd|daily)\b)", std::regex::icase), "Once daily"},
-      {std::regex(R"(\b(bd|bid|twice daily|twice a day)\b)", std::regex::icase), "Twice daily"},
-      {std::regex(R"(\b(tds|tid|thrice daily|three times daily|three times a day)\b)", std::regex::icase), "Three times daily"},
-      {std::regex(R"(\b(qid|qds|four times daily)\b)", std::regex::icase), "Four times daily"},
+      // Most specific first: "three times daily" must not stop at the bare "daily".
+      {std::regex(R"(\b(qid|qds|four times daily|(?:4|four)\s*(?:times|x)\s*(?:a|per)?\s*(?:day|daily))\b)", std::regex::icase), "Four times daily"},
+      {std::regex(R"(\b(tds|tid|thrice daily|thrice a day|(?:3|three)\s*(?:times|x)\s*(?:a|per)?\s*(?:day|daily))\b)", std::regex::icase), "Three times daily"},
+      {std::regex(R"(\b(bd|bid|twice daily|twice a day|(?:2|two)\s*(?:times|x)\s*(?:a|per)?\s*(?:day|daily))\b)", std::regex::icase), "Twice daily"},
+      {std::regex(R"(\b(od|qd|once daily|once a day|(?:1|one)\s*(?:time|times|x)\s*(?:a|per)?\s*(?:day|daily)|daily)\b)", std::regex::icase), "Once daily"},
       {std::regex(R"(\b(hs|at night|at bedtime|bedtime|nocte)\b)", std::regex::icase), "At night"},
       {std::regex(R"(\b(sos|prn|as needed|when required)\b)", std::regex::icase), "When required"},
       {std::regex(R"(\b(stat|single dose)\b)", std::regex::icase), "Single dose"},

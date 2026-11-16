@@ -39,7 +39,7 @@ Demo accounts (password `Clinic-Demo-2026`): `dr.meera`, `dr.arjun`, `reception`
 
 | Suite | Count | Command |
 |---|---|---|
-| Backend unit (C++) | 34 | `ctest --test-dir backend/build` |
+| Backend unit (C++) | 35 | `ctest --test-dir backend/build` |
 | API integration (pytest, real DB) | 115 | `pytest tests/api` |
 | Frontend unit | 19 | `cd frontend && npm test` |
 | End-to-end UI (Playwright) | 20 + 10 + 9 | `cd frontend && npm run test:e2e && npm run test:e2e:derm && npm run test:e2e:handwriting` |

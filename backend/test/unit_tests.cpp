@@ -507,6 +507,19 @@ TEST(hosted_db_url_credentials) {
   CHECK(threw);
 }
 
+
+TEST(extract_medicine_frequency_in_words) {
+  std::vector<cf::derm::KnownMedicine> meds = {{"BENZOYL_PEROXIDE", "Benzoyl peroxide"}, {"CETIRIZINE", "Cetirizine"}, {"DOXYCYCLINE", "Doxycycline"}};
+  auto r = cf::derm::extractClinicalText("Benzoyl Peroxide - 2 times a day for 15 days\ncetirizine 10 mg three times daily\ndoxycycline 100 mg once a day x 6 weeks", meds, {});
+  auto& m = r["medicines"];
+  CHECK(m.size() == 3);
+  CHECK(m[0]["frequency"] == "Twice daily");
+  CHECK(m[0]["durationDays"] == 15);
+  CHECK(m[1]["frequency"] == "Three times daily");
+  CHECK(m[2]["frequency"] == "Once daily");
+  CHECK(m[2]["durationDays"] == 42);
+}
+
 int main() {
   for (auto& [name, fn] : registry()) {
     try {
