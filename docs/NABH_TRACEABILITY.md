@@ -9,7 +9,7 @@ The element numbering, category (Core / Commitment / Achievement / Excellence) a
 
 **Status legend:** Not Started · In Progress (partially met; see the gap) · Implemented (built, no automated test) · Tested (built and covered by an automated test) · Not Applicable
 
-Test references: `api:` = `tests/api/<file>::<test>`, `unit:` = `backend/test/unit_tests.cpp`, `e2e:` = `frontend/e2e/run-e2e.mjs`, `e2e-derm:` = `frontend/e2e/run-derm-e2e.mjs`, `fe:` = `frontend/tests/validation.test.ts`.
+Test references: `api:` = `tests/api/<file>::<test>`, `unit:` = `backend/test/unit_tests.cpp`, `e2e:` = `frontend/e2e/run-e2e.mjs`, `e2e-derm:` = `frontend/e2e/run-derm-e2e.mjs`, `fe:` = `frontend/tests/validation.test.ts`, `e2e-hw:` = `frontend/e2e/run-handwriting-e2e.mjs`.
 
 ---
 
@@ -110,6 +110,19 @@ These rows were checked against the CMS standard text (COP.5, COP.8, MOM.2, MOM.
 - *Digital Personal Data Protection Act, 2023:* network sharing requires a recorded data-sharing agreement reference at clinic level; patients can opt out (and contributed records are withdrawn); network records hold no direct identifiers and use keyed pseudonyms, month-level dates and coarse age bands; small cohorts are suppressed. Whether this meets the Act and its rules for a given deployment is a legal assessment the clinic must make; ClinicFlow does not provide the agreement, privacy notice or legal basis.
 - *ABDM / FHIR:* unchanged from v0.1 (mock gateway). Dermatology findings and photographs are not yet mapped to FHIR (Observation/Media) — see ROADMAP.
 - *Clinical photographs:* captured only with recorded consent and scope; stored encrypted; views audited; never deleted (entered-in-error instead).
+
+## Handwritten consultation notes (v0.3) — effect on existing elements
+
+No new elements are claimed. The handwriting feature supports elements already in scope; status values above are unchanged. Details in `docs/HANDWRITING.md`.
+
+| OE | How handwritten notes support it | API / service | Tables | Security / audit | Test case |
+|---|---|---|---|---|---|
+| COP.1a | The doctor can record the assessment by hand. Recognised text is corrected by the doctor and then fills the same structured fields (complaint, history, examination, plan, dermatology assessment), so the structured record stays the source of truth. | `PUT /consultations/{id}/handwriting/pages/{n}`, `POST …/handwriting/analyse`, `…/extract`, `POST /handwriting/transcriptions/{id}/accept` | handwritten_note_pages, handwriting_transcriptions | Treating doctor only, draft consultations only | api: test_handwriting::test_save_page_overview_ink_and_image, ::test_accept_requires_review_and_is_immutable; e2e-hw: accept applies the approved fields |
+| COP.1b | Previous visits show handwritten pages and whether a transcription was approved; page images can be viewed later. | `GET /patients/{id}/timeline`, `GET …/handwriting/pages/{n}/image` | as above | HANDWRITING_VIEW audit | api: test_handwriting::test_pages_lock_with_consultation_and_appear_in_history; e2e-hw: finalized record |
+| COP.1d / COP.8a | Medicines and diagnoses mentioned in the notes are only proposed. Diagnoses are added as provisional; medicines go to the draft prescription marked "check dose", then pass through the existing safety check and decision support before the doctor finalizes. | `ClinicalTextExtractor`, existing prescription and CDS endpoints | prescriptions, consultation_diagnoses | Nothing is finalized automatically | unit: extract_*; e2e-hw: decision support runs on the approved information |
+| DAC.2a | Ink and page images are encrypted at rest (AES-256-GCM) with an image hash. Calls to an external recognition provider use verified TLS. | `HandwritingService`, `hwr::httpPost` | handwritten_note_pages.strokes_enc / image_enc | — | api: test_handwriting::test_save_page_overview_ink_and_image; api: test_handwriting::test_recognition_through_configured_provider |
+| DAC.2b | Read needs `clinical.read`; writing and approval need `clinical.write` and being the treating doctor; clinic isolation by RLS. | HandwritingController | RLS on both tables | Deny by default | api: test_handwriting::test_access_control, ::test_handwriting_isolated_between_clinics |
+| DAC.2c | HANDWRITING_SAVE, _VIEW, _DELETE, _RECOGNITION (provider, external or not, error), _ACCEPT, _DISCARD join the hash-chained audit log. Machine output and reviewed transcriptions cannot be changed (DB trigger). | AuditService | audit_log | Tamper-evident | api: test_handwriting (audit assertions) |
 
 ---
 

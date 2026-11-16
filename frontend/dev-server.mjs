@@ -5,6 +5,7 @@ import { context } from "esbuild";
 import { cpSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import { SECURITY_HEADERS } from "./security-headers.mjs";
 
 const API_TARGET = new URL(process.env.API_TARGET || "http://localhost:8000");
 const PORT = Number(process.env.PORT || 5173);
@@ -43,7 +44,7 @@ http
     const clean = decodeURIComponent(req.url.split("?")[0]);
     let file = path.join("dist", clean === "/" ? "index.html" : clean);
     if (!file.startsWith("dist") || !existsSync(file)) file = "dist/index.html";
-    res.writeHead(200, { "Content-Type": types[path.extname(file)] || "application/octet-stream" });
+    res.writeHead(200, { ...SECURITY_HEADERS, "Content-Type": types[path.extname(file)] || "application/octet-stream" });
     res.end(readFileSync(file));
   })
   .listen(PORT, () => console.log(`ClinicFlow dev server: http://localhost:${PORT} (API → ${API_TARGET.origin})`));

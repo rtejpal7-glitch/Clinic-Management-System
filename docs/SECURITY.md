@@ -41,6 +41,7 @@ This document lists the security controls in the PoC, where they live in the cod
 |---|---|---|
 | In transit | The API is designed to sit behind TLS termination (nginx / load balancer). The PoC runs HTTP on localhost only. | TLS 1.2+ with valid certificates, HSTS, HTTP→HTTPS redirect, TLS between proxy and API on untrusted networks, `sslmode=verify-full` to PostgreSQL. |
 | Field-level encryption at rest | ABHA numbers and addresses: AES-256-GCM, random 96-bit nonce, authentication tag, versioned `v1:` prefix. Equality search uses an HMAC-SHA256 blind index with a separate key. | Keys in a KMS or HSM (AWS KMS, Azure Key Vault, HashiCorp Vault), not environment files. Key-rotation job (re-encrypt to `v2:`). |
+| Handwritten notes (v0.3) | Vector ink and page images: AES-256-GCM with the same key as above, plus a SHA-256 image hash in the record and audit log. Recognition providers are off by default; when enabled, calls use TLS with certificate and host-name verification, and each call is audited with the provider and whether data left ClinicFlow. | A data processing agreement before enabling any external recognition provider; restrict the provider's API key. See HANDWRITING.md. |
 | Database at rest | — | Encrypted volume or managed-database storage encryption (for example RDS/Cloud SQL encryption, LUKS). |
 | Backups | — | Encrypted `pg_dump`/WAL archives (for example `pgBackRest` with repository encryption), stored off-site, restore tested regularly. |
 | Caching | `Cache-Control: no-store` on all API responses. `index.html` not cached. | |

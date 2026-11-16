@@ -39,6 +39,15 @@ services:
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?}
       ABDM_MODE: mock
       TRUST_PROXY_HEADERS: "true"
+      # Handwriting recognition (docs/HANDWRITING.md). Default "none": doctors type or
+      # dictate the note text themselves; nothing leaves ClinicFlow.
+      HWR_PROVIDER: ${HWR_PROVIDER:-none}
+      HWR_GOOGLE_API_KEY: ${HWR_GOOGLE_API_KEY:-}
+      HWR_GOOGLE_ENDPOINT: ${HWR_GOOGLE_ENDPOINT:-https://vision.googleapis.com}
+      HWR_HTTP_URL: ${HWR_HTTP_URL:-}
+      HWR_HTTP_TOKEN: ${HWR_HTTP_TOKEN:-}
+      HWR_HTTP_LABEL: ${HWR_HTTP_LABEL:-}
+      HWR_TIMEOUT_SECONDS: ${HWR_TIMEOUT_SECONDS:-30}
     ports:
       - "8000:8000"
 

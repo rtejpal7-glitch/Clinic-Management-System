@@ -28,6 +28,15 @@ python scripts\seed_derm_demo.py --api http://localhost:8080/api/v1 --approve-co
 All demo accounts use `Clinic-Demo-2026`: `dr.kavya` (dermatology, 3 patients waiting), `dr.farhan`, `reception`, `reviewer.demo`, `admin.twacha`, `admin.nirmal`, `dr.meera`.
 `--approve-content-for-demo` marks the AI-drafted starter content approved **for demonstration only — not a clinical review**.
 
+## Try the handwriting pad on your iPad (same Wi-Fi)
+1. Already running? Rebuild once to pick up this version: `docker compose up --build`.
+2. On the PC, find its address: `ipconfig` → *IPv4 Address* (e.g. `192.168.1.20`).
+3. On the iPad, open Safari at `http://192.168.1.20:8080`. If it does not load, allow Docker Desktop through Windows Firewall for private networks.
+4. Sign in as `dr.kavya` (or any doctor), open an appointment, press **Start consultation**. The **Handwritten notes** tab opens on its own.
+5. Write, then **Analyse handwriting**. With no recognition provider configured (the default), type or Scribble the text in the box on the right; ClinicFlow proposes the fields for you to tick. See `docs/HANDWRITING.md`.
+
+This is plain HTTP on your local network, for trying it out only. Use HTTPS for anything beyond a demo (`docs/DEPLOY_VERCEL.md`).
+
 ## Everyday
 | Action | Command |
 |---|---|

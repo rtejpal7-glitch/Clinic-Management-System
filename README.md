@@ -13,6 +13,7 @@ A working proof of concept of an outpatient clinic management system for dermato
 | OPD / EMR | Structured notes, 8 vital signs with BMI, ICD-10 coded diagnoses, draft → finalized (locked) records, addenda for corrections, patient timeline, printable visit summary |
 | e-Prescription & CPOE | Medicine catalogue (generic vs brand), dose / route / frequency / duration, investigation orders with LOINC codes, advice, printable prescription, **safety checks** (allergy, pregnancy, age, duplicates, interactions, high-alert, AWaRe) with documented override |
 | Dermatology (v0.2) | Coded skin assessment, consented and encrypted clinical photographs, three separate decision-support panels side by side — **A** guideline knowledge, **B** the doctor's own comparable cases, **C** de-identified cross-clinic patterns with disclosure thresholds — explicit "Add" only, suggested-vs-prescribed tracking, follow-up outcomes, doctor dashboard, clinical-content review workflow. See [docs/DERMATOLOGY.md](docs/DERMATOLOGY.md) |
+| Handwritten notes (v0.3) | iPad + Apple Pencil writing pad inside the consultation (pressure, eraser, undo, pages, autosave), optional handwriting recognition through a pluggable provider, doctor-corrected text shown beside the original, proposed structured fields the doctor ticks before they reach the consultation and decision support; original pages and the approved transcription kept in the record. See [docs/HANDWRITING.md](docs/HANDWRITING.md) |
 | Multi-clinic (v0.2) | Several clinics in one installation, isolated by PostgreSQL row-level security; per-clinic users, roles, services and identity; opt-in network participation under a recorded agreement; patient opt-out |
 | Billing | Service rates, multi-line invoices, discounts with reason, GST after discount, integer-paise arithmetic, partial payments, refunds, cancellation, daily summary |
 | Security | Argon2id passwords, lockout, forced change of temporary passwords, server-side sessions with idle timeout, RBAC deny-by-default (36 permissions, custom roles), row-level security per clinic, append-only hash-chained audit log, AES-256-GCM field encryption for ABHA, least-privilege DB role |
@@ -38,10 +39,10 @@ Demo accounts (password `Clinic-Demo-2026`): `dr.meera`, `dr.arjun`, `reception`
 
 | Suite | Count | Command |
 |---|---|---|
-| Backend unit (C++) | 28 | `ctest --test-dir backend/build` |
-| API integration (pytest, real DB) | 106 | `pytest tests/api` |
-| Frontend unit | 11 | `cd frontend && npm test` |
-| End-to-end UI (Playwright) | 20 + 10 | `cd frontend && npm run test:e2e && npm run test:e2e:derm` |
+| Backend unit (C++) | 33 | `ctest --test-dir backend/build` |
+| API integration (pytest, real DB) | 115 | `pytest tests/api` |
+| Frontend unit | 19 | `cd frontend && npm test` |
+| End-to-end UI (Playwright) | 20 + 10 + 9 | `cd frontend && npm run test:e2e && npm run test:e2e:derm && npm run test:e2e:handwriting` |
 
 See [docs/TESTING.md](docs/TESTING.md).
 
@@ -52,10 +53,12 @@ See [docs/TESTING.md](docs/TESTING.md).
 | [docs/SETUP.md](docs/SETUP.md) | Installation, configuration, running locally with or without Docker |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Architecture diagram, modules, key design decisions |
 | [docs/DATABASE.md](docs/DATABASE.md) | Schema, ER diagram, constraints, retention |
-| [docs/API.md](docs/API.md) + [docs/api/openapi.json](docs/api/openapi.json) | REST API reference (107 operations) |
+| [docs/API.md](docs/API.md) + [docs/api/openapi.json](docs/api/openapi.json) | REST API reference (116 operations) |
 | [docs/SECURITY.md](docs/SECURITY.md) | Security controls and how they are implemented |
 | [docs/ABDM_INTEGRATION.md](docs/ABDM_INTEGRATION.md) | Interoperability architecture, mock workflows, path to live integration |
 | [docs/DERMATOLOGY.md](docs/DERMATOLOGY.md) | Dermatology module, decision-support logic, privacy controls, limitations |
+| [docs/HANDWRITING.md](docs/HANDWRITING.md) | Handwritten notes on iPad: workflow, recognition providers, privacy, real-iPad checklist |
+| [docs/DEPLOY_VERCEL.md](docs/DEPLOY_VERCEL.md) | Hosting the web client on Vercel with the backend elsewhere |
 | [docs/NABH_TRACEABILITY.md](docs/NABH_TRACEABILITY.md) | Requirement traceability matrix (51 objective elements, verified against the standard) |
 | [docs/TESTING.md](docs/TESTING.md) | Test strategy and execution guide |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Known limitations and future development |

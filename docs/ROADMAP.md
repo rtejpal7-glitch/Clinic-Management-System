@@ -10,7 +10,8 @@
 **Clinical**
 - Dermatology decision support (v0.2) uses an AI-drafted starter knowledge base that **must be clinically reviewed** before use. Its rule weights are not validated for diagnostic accuracy. Safety checks cover only the 53 coded starter medicines and 10 interaction pairs; there are no dose-range checks. A licensed drug database is needed.
 - Prescribing patterns become meaningful only with real finalized cases. Demo data is synthetic and created in a single month.
-- Dermatology findings and photographs are not yet in the FHIR bundle (Observation/Media).
+- Dermatology findings and photographs are not yet in the FHIR bundle (Observation/Media). Handwritten pages are not in it either.
+- Handwritten notes (v0.3): recognition depends on an external or self-hosted provider; none was tested live. Extraction is rule-based, English-only and dermatology-focused. The writing pad was tested in Chromium with iPad emulation, not in Safari on a real iPad. Lasso/move, highlighter and typed text boxes on the page are not implemented.
 - Starter catalogues (40 medicines, 17 investigations, 20 ICD-10 codes) need replacing with a licensed formulary and terminology.
 - No nurse/triage role for pre-consultation vitals. No referrals, order sets, digital signatures or multilingual summaries.
 - No lab or radiology result capture (optional LTS/RLS modules), and no daycare module.

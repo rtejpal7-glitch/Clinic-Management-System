@@ -222,6 +222,8 @@ export interface TimelineEntry {
   investigations: string[];
   vitals?: Vitals;
   followUpDate?: string;
+  handwrittenPages?: number;
+  handwritingTranscribed?: boolean;
 }
 
 export interface Allergy {

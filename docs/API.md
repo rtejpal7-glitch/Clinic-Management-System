@@ -9,7 +9,7 @@ Base path `/api/v1`. All endpoints except `POST /auth/login` and `GET /health` n
 - Common codes: `VALIDATION_ERROR` (400), `UNAUTHENTICATED` / `SESSION_INVALID` / `INVALID_CREDENTIALS` (401), `FORBIDDEN` / `PASSWORD_CHANGE_REQUIRED` (403), `NOT_FOUND` (404), `POSSIBLE_DUPLICATE`, `SLOT_UNAVAILABLE`, `STALE_VERSION`, `RECORD_LOCKED`, `INVALID_STATE`, `ALREADY_BILLED` (409), `PAYLOAD_TOO_LARGE` (413), `SLOT_OUTSIDE_SCHEDULE`, `ABHA_NOT_LINKED`, `NO_ACTIVE_CONSENT` (422), `ACCOUNT_LOCKED` (423). v0.2 adds `SAFETY_ACKNOWLEDGEMENT_REQUIRED` (409, alerts in `data.alerts`; resend finalize with `safetyOverrideReason`), `SHARED_ROLE` / `INSTALLATION_SETTING` (403), `CLINIC_CODE_TAKEN`, `PHOTO_LIMIT` (409).
 - Updates that can conflict take a `version` (optimistic locking).
 
-## Endpoints (107 operations)
+## Endpoints (116 operations)
 
 
 ### Auth
@@ -80,6 +80,22 @@ Base path `/api/v1`. All endpoints except `POST /auth/login` and `GET /health` n
 | GET | `/derm/vocabulary` | Dermatology coded vocabulary (problem types, lesions, sites, ...) |
 | POST | `/photos/{id}/entered-in-error` | Mark a photograph entered-in-error (never deleted) |
 | GET | `/photos/{id}/image` | Image bytes of a clinical photograph (every view is audited) |
+
+### Handwritten notes (v0.3)
+
+See [HANDWRITING.md](HANDWRITING.md). Page bodies may be up to 9 MB. `VERSION_CONFLICT` (409) when `expectedVersion` is stale; `RECORD_LOCKED` (409) after finalize.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/consultations/{id}/handwriting` | Handwritten note pages and transcriptions of a consultation |
+| GET | `/consultations/{id}/handwriting/pages/{page}/ink` | Vector ink of one page (decrypted) |
+| GET | `/consultations/{id}/handwriting/pages/{page}/image` | Rendered PNG of one page (view is audited) |
+| PUT | `/consultations/{id}/handwriting/pages/{page}` | Save one page: vector ink + rendered PNG (treating doctor, draft only) |
+| DELETE | `/consultations/{id}/handwriting/pages/{page}` | Remove a page (draft only) |
+| POST | `/consultations/{id}/handwriting/analyse` | Analyse handwriting: recognition (if configured) + proposed structured fields; creates a transcription awaiting review |
+| POST | `/consultations/{id}/handwriting/extract` | Propose structured fields from (corrected) note text; stores nothing |
+| POST | `/handwriting/transcriptions/{tid}/accept` | Doctor accepts the reviewed text and the fields applied to the consultation |
+| POST | `/handwriting/transcriptions/{tid}/discard` | Discard a transcription without applying it |
 
 ### Decision support
 

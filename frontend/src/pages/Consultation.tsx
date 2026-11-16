@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import type { Allergy, Consultation, Diagnosis, InvestigationItem, InvestigationOrder, Medication, Patient, RxItem, TimelineEntry, Vitals } from "../lib/types";
@@ -12,9 +12,10 @@ import { IconAlert, IconLock, IconPrinter, IconTrash } from "../components/icons
 import { DermAssessmentTab } from "./derm/DermAssessment";
 import { DecisionPanels } from "./derm/DecisionPanels";
 import { DecisionRecordPanel, SafetyOverrideModal, SafetyPanel } from "./derm/SafetyAndOutcome";
-import { SOURCE_LABEL, type SafetyAlert } from "../lib/derm";
+import { SOURCE_LABEL, type SafetyAlert, type DermAssessment } from "../lib/derm";
+import { HandwritingTab, type AcceptedFields } from "./derm/HandwritingTab";
 
-type Tab = "notes" | "derm" | "cds" | "rx" | "previous" | "record";
+type Tab = "notes" | "handwriting" | "derm" | "cds" | "rx" | "previous" | "record";
 /** Sensible starting dose by dosage form; the doctor always reviews it. */
 function defaultDose(form: string): string {
   const f = form.toUpperCase();
@@ -47,6 +48,14 @@ export function ConsultationPage({ id }: { id: string }) {
   const [safetyKey, setSafetyKey] = useState(0);
 
   useEffect(() => { if (res.data) { setC(res.data); setDirty(false); } }, [res.data]);
+  // On a tablet with a stylus (e.g. iPad), open straight onto the writing pad when starting a consultation.
+  const openedPad = useRef(false);
+  useEffect(() => {
+    if (!res.data || openedPad.current) return;
+    openedPad.current = true;
+    const tablet = typeof navigator !== "undefined" && navigator.maxTouchPoints > 1;  // iPadOS reports a desktop user agent but 5 touch points
+    if (tablet && res.data.canEdit) setTab("handwriting");
+  }, [res.data]);
   useEffect(() => {
     const h = (e: BeforeUnloadEvent) => { if (dirty) e.preventDefault(); };
     window.addEventListener("beforeunload", h);
@@ -66,19 +75,20 @@ export function ConsultationPage({ id }: { id: string }) {
   const update = (patch: Partial<Consultation>) => { setC({ ...c, ...patch }); setDirty(true); };
   const updateRx = (patch: Partial<Consultation["prescription"]>) => { setC({ ...c, prescription: { ...c.prescription, ...patch } }); setDirty(true); };
 
-  const save = async (quiet = false): Promise<Consultation | null> => {
-    const vErr = c.vitals ? validateVitals(c.vitals as Record<string, number | null>) : {};
+  const save = async (quiet = false, override?: Consultation): Promise<Consultation | null> => {
+    const cur = override ?? c;
+    const vErr = cur.vitals ? validateVitals(cur.vitals as Record<string, number | null>) : {};
     setErrors(vErr);
     if (Object.keys(vErr).length) { setTab("notes"); return null; }
     setBusy(true); setApiErr(null);
     try {
-      const notes = await api.put<Consultation>(`/consultations/${c.id}`, {
-        version: c.version, chiefComplaint: c.chiefComplaint, historyPresentIllness: c.historyPresentIllness, pastMedicalHistory: c.pastMedicalHistory,
-        currentMedications: c.currentMedications, examinationNotes: c.examinationNotes, treatmentPlan: c.treatmentPlan,
-        followUpInstructions: c.followUpInstructions, followUpDate: c.followUpDate || null, vitals: c.vitals ?? null, diagnoses: c.diagnoses,
+      const notes = await api.put<Consultation>(`/consultations/${cur.id}`, {
+        version: cur.version, chiefComplaint: cur.chiefComplaint, historyPresentIllness: cur.historyPresentIllness, pastMedicalHistory: cur.pastMedicalHistory,
+        currentMedications: cur.currentMedications, examinationNotes: cur.examinationNotes, treatmentPlan: cur.treatmentPlan,
+        followUpInstructions: cur.followUpInstructions, followUpDate: cur.followUpDate || null, vitals: cur.vitals ?? null, diagnoses: cur.diagnoses,
       });
-      const saved = await api.put<Consultation>(`/consultations/${c.id}/prescription`, {
-        advice: c.prescription.advice, items: c.prescription.items, investigations: c.prescription.investigations,
+      const saved = await api.put<Consultation>(`/consultations/${cur.id}/prescription`, {
+        advice: cur.prescription.advice, items: cur.prescription.items, investigations: cur.prescription.investigations,
       });
       setC({ ...saved, version: Math.max(saved.version, notes.version) });
       setDirty(false);
@@ -114,6 +124,36 @@ export function ConsultationPage({ id }: { id: string }) {
     updateRx({ items: [...c.prescription.items, item] });
     toast(`${item.medicineName} added to the prescription. Review dose, frequency and duration.`);
   };
+  // Apply doctor-approved fields from the handwriting review: notes, provisional
+  // diagnoses and draft medicines through the normal save, findings through the
+  // dermatology assessment. Nothing is finalized.
+  const applyHandwriting = async (f: AcceptedFields): Promise<boolean> => {
+    const next: Consultation = { ...c, diagnoses: [...c.diagnoses], prescription: { ...c.prescription, items: [...c.prescription.items] } };
+    for (const [k, v] of Object.entries(f.notes) as [keyof AcceptedFields["notes"], string][]) {
+      const existing = (next[k] as string | undefined)?.trim();
+      next[k] = !existing ? v : existing.includes(v) ? existing : `${existing}\n${v}`;
+    }
+    for (const dx of f.diagnoses)
+      if (!next.diagnoses.some((x) => x.code === dx.code)) next.diagnoses.push({ codeSystem: "ICD-10", code: dx.code, display: dx.display, diagnosisType: "PROVISIONAL" });
+    for (const m of f.medicines)
+      next.prescription.items.push({ medicationId: m.medicationId, medicineName: m.medicineName, strength: m.strength, dosageForm: m.dosageForm, route: m.route,
+        dose: defaultDose(m.dosageForm), frequency: m.frequency ?? "", durationDays: m.durationDays ?? null, sourceKind: "MANUAL",
+        instructions: "From handwritten notes - check dose" });
+    const saved = await save(true, next);
+    if (!saved) return false;
+    if (Object.keys(f.assessment).length) {
+      const cur = await api.get<DermAssessment>(`/consultations/${c.id}/derm`);
+      const merged: Record<string, unknown> = { ...cur };
+      for (const [k, v] of Object.entries(f.assessment)) {
+        if (Array.isArray(v)) merged[k] = Array.from(new Set([...((cur as unknown as Record<string, string[]>)[k] ?? []), ...v]));
+        else merged[k] = v;
+      }
+      try { await api.put(`/consultations/${c.id}/derm`, merged); }
+      catch (e) { setApiErr(e as ApiError); return false; }
+    }
+    return true;
+  };
+
   const rxGenerics = new Set(c.prescription.items.map((i) => i.genericCode).filter(Boolean) as string[]);
 
   const share = async () => {
@@ -167,6 +207,7 @@ export function ConsultationPage({ id }: { id: string }) {
 
       <Tabs tabs={[
         { id: "notes" as Tab, label: "Notes, vitals & diagnosis" },
+        { id: "handwriting" as Tab, label: "Handwritten notes" },
         ...(isDerm ? [{ id: "derm" as Tab, label: "Dermatology assessment" }] : []),
         ...(isDerm && editable && can("cds.use") ? [{ id: "cds" as Tab, label: "Decision support (A · B · C)" }] : []),
         { id: "rx" as Tab, label: `Prescription & orders (${c.prescription.items.length + c.prescription.investigations.length})` },
@@ -175,6 +216,10 @@ export function ConsultationPage({ id }: { id: string }) {
       ]} value={tab} onChange={setTab} />
 
       {tab === "notes" && <NotesTab c={c} editable={editable} errors={errors} update={update} />}
+      {tab === "handwriting" && (
+        <HandwritingTab consultationId={c.id} onApply={applyHandwriting} onOpenDecisionSupport={() => setTab("cds")}
+          showDecisionSupport={isDerm && editable && can("cds.use")} />
+      )}
       {tab === "derm" && <DermAssessmentTab consultationId={c.id} editable={editable} patientSex={patient.data?.gender} />}
       {tab === "cds" && (
         <>
@@ -455,6 +500,9 @@ function PreviousVisits({ patientId, currentId }: { patientId: string; currentId
               <div className="row" style={{ justifyContent: "space-between" }}><strong>{e.chiefComplaint ?? "—"}</strong><a className="small" href={`#/consultations/${e.consultationId}`}>Open</a></div>
               {e.diagnoses.length > 0 && <div className="chips">{e.diagnoses.map((d) => <span key={d} className="chip">{d}</span>)}</div>}
               {e.medicines.length > 0 && <div className="small">{e.medicines.join("; ")}</div>}
+              {!!e.handwrittenPages && (
+                <div className="small muted">✍ {e.handwrittenPages} handwritten page{e.handwrittenPages === 1 ? "" : "s"}{e.handwritingTranscribed ? " · doctor-approved transcription" : ""}</div>
+              )}
             </div>
           </li>
         ))}
