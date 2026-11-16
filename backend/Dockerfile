@@ -15,8 +15,12 @@ RUN git clone --depth 1 --branch 1.3.0 https://github.com/oatpp/oatpp.git \
 RUN git clone --depth 1 --branch 1.3.0 https://github.com/oatpp/oatpp-swagger.git \
  && cmake -S oatpp-swagger -B oatpp-swagger/build -DCMAKE_BUILD_TYPE=Release -DOATPP_BUILD_TESTS=OFF \
  && cmake --build oatpp-swagger/build -j"$(nproc)" && cmake --install oatpp-swagger/build
+# argon2 defaults to -march=native, which tunes the library to the build machine's CPU.
+# Hosted builders (Render, CI) often have newer CPUs than the servers that run the image,
+# and the server then dies with "illegal instruction" (exit 132) on the first password hash.
+# x86-64 is the portable baseline; on other architectures argon2 falls back to its reference code.
 RUN git clone --depth 1 --branch 20190702 https://github.com/P-H-C/phc-winner-argon2.git \
- && make -C phc-winner-argon2 libs \
+ && make -C phc-winner-argon2 OPTTARGET=x86-64 libs \
  && cp phc-winner-argon2/libargon2.a /usr/local/lib/ && cp phc-winner-argon2/include/argon2.h /usr/local/include/
 RUN git clone --depth 1 --branch v3.11.3 https://github.com/nlohmann/json.git \
  && cp -r json/single_include/nlohmann /usr/local/include/
