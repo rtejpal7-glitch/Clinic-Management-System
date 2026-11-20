@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <map>
 #include <optional>
 #include <regex>
@@ -345,7 +346,8 @@ json extractClinicalText(const std::string& text, const std::vector<KnownMedicin
       {std::regex(R"(^\s*(rx|plan|treatment|tx|advice|advised|management)\b\s*[:\-]?\s*)", std::regex::icase), "plan"},
   };
   std::map<std::string, std::string> sections;
-  std::vector<std::string> lineSection(lines.size(), "");
+  std::vector<std::string> lineSection(lines.size(), "");  // "" = no heading above this line
+  std::vector<std::string> lineBody(lines.size());
   std::string current;
   bool anyHeading = false;
   for (size_t li = 0; li < lines.size(); ++li) {
@@ -362,25 +364,19 @@ json extractClinicalText(const std::string& text, const std::vector<KnownMedicin
     std::string trimmed = body;
     trimmed.erase(0, trimmed.find_first_not_of(" \t\r"));
     trimmed.erase(trimmed.find_last_not_of(" \t\r") + 1 == 0 ? 0 : trimmed.find_last_not_of(" \t\r") + 1);
-    std::string sec = current.empty() ? "other" : current;
-    lineSection[li] = sec;
-    if (trimmed.empty()) continue;
-    auto& s = sections[sec];
-    s += (s.empty() ? "" : "\n") + trimmed;
-  }
-  if (!anyHeading && !lines.empty()) {
-    // No headings: the first non-empty line is taken as the complaint, the rest as notes.
-    std::string first, rest;
-    for (auto& l : lines) {
-      std::string t = l;
-      t.erase(0, t.find_first_not_of(" \t\r"));
-      if (t.empty()) continue;
-      if (first.empty()) first = t;
-      else rest += (rest.empty() ? "" : "\n") + t;
+    lineSection[li] = current;
+    // leading bullets and list numbers ("1.", "-", "•", "·") are not part of the note
+    size_t b = 0;
+    for (bool more = true; more && b < trimmed.size();) {
+      more = false;
+      if (std::strchr(".-*>", trimmed[b])) { ++b; more = true; }
+      else if (trimmed.compare(b, 3, "\xE2\x80\xA2") == 0 || trimmed.compare(b, 3, "\xE2\x80\x93") == 0) { b += 3; more = true; }
+      else if (trimmed.compare(b, 2, "\xC2\xB7") == 0) { b += 2; more = true; }
+      else if (std::isdigit(static_cast<unsigned char>(trimmed[b])) && b + 1 < trimmed.size() && (trimmed[b + 1] == '.' || trimmed[b + 1] == ')') &&
+               (b + 2 >= trimmed.size() || !std::isdigit(static_cast<unsigned char>(trimmed[b + 2])))) { b += 2; more = true; }
+      while (b < trimmed.size() && trimmed[b] == ' ') ++b;
     }
-    sections.clear();
-    if (!first.empty()) sections["complaint"] = first;
-    if (!rest.empty()) sections["other"] = rest;
+    lineBody[li] = trimmed.substr(b);
   }
 
   // ---- medicines (matched first so their words are not read as findings)
@@ -405,14 +401,16 @@ json extractClinicalText(const std::string& text, const std::vector<KnownMedicin
     if (w.size() > 1 && w[0].size() >= 6) aliases.push_back({{w[0]}, &m});
   }
   std::sort(aliases.begin(), aliases.end(), [](const MedAlias& a, const MedAlias& b) { return a.w.size() > b.w.size(); });
-  static const std::regex strengthRe(R"(\b(\d+(?:\.\d+)?)\s*(mg|mcg|g|gm|ml|%|iu)\b)", std::regex::icase);
+  static const std::regex strengthRe(R"(\b(\d+(?:\.\d+)?)\s*(mg|mcg|gm|g|ml|iu|%)(?![a-z]))", std::regex::icase);
   static const std::vector<std::pair<std::regex, std::string>> freqs = {
       // Most specific first: "three times daily" must not stop at the bare "daily".
       {std::regex(R"(\b(qid|qds|four times daily|(?:4|four)\s*(?:times|x)\s*(?:a|per)?\s*(?:day|daily))\b)", std::regex::icase), "Four times daily"},
       {std::regex(R"(\b(tds|tid|thrice daily|thrice a day|(?:3|three)\s*(?:times|x)\s*(?:a|per)?\s*(?:day|daily))\b)", std::regex::icase), "Three times daily"},
       {std::regex(R"(\b(bd|bid|twice daily|twice a day|(?:2|two)\s*(?:times|x)\s*(?:a|per)?\s*(?:day|daily))\b)", std::regex::icase), "Twice daily"},
+      {std::regex(R"(\b(every evening|in the evening|evenings?|at evening)\b)", std::regex::icase), "Once daily, evening"},
+      {std::regex(R"(\b(every morning|in the morning|mornings?)\b)", std::regex::icase), "Once daily, morning"},
       {std::regex(R"(\b(od|qd|once daily|once a day|(?:1|one)\s*(?:time|times|x)\s*(?:a|per)?\s*(?:day|daily)|daily)\b)", std::regex::icase), "Once daily"},
-      {std::regex(R"(\b(hs|at night|at bedtime|bedtime|nocte)\b)", std::regex::icase), "At night"},
+      {std::regex(R"(\b(hs|at night|every night|at bedtime|bedtime|nocte)\b)", std::regex::icase), "At night"},
       {std::regex(R"(\b(sos|prn|as needed|when required)\b)", std::regex::icase), "When required"},
       {std::regex(R"(\b(stat|single dose)\b)", std::regex::icase), "Single dose"},
       {std::regex(R"(\b(once weekly|weekly)\b)", std::regex::icase), "Once weekly"},
@@ -464,6 +462,114 @@ json extractClinicalText(const std::string& text, const std::vector<KnownMedicin
       if (!negated[i]) meds.push_back(m);
       medSpans.push_back({toks[i].line, toks[i].start});
       break;
+    }
+  }
+
+  // ---- prescription lines
+  // A line belongs to the prescription when it is under an Rx/plan heading, or has no clinical
+  // heading and names a medicine or reads like an instruction ("apply…", "…tab", "2 times a day").
+  // Prescription lines go to the treatment plan and are never read as findings: "apply on face
+  // for 10 days" says where and how long to treat, not where the problem is or how long it lasted.
+  static const std::regex rxCueRe(
+      R"(\b(apply|tab|tabs|tablet|tablets|cap|caps|capsule|capsules|cream|gel|oint|ointment|lotion|solution|soln|soap|shampoo|syrup|syp|susp|suspension|drops|inj|injection|spray|powder|dusting powder|face ?wash|serum|sunscreen|moisturi[sz]er|emollient|sachet|paint)\b)",
+      std::regex::icase);
+  static const std::regex rxDoseRe(
+      R"(\b\d+(?:\.\d+)?\s*(mg|mcg|ml|iu)\b|\b(od|bd|bid|tds|tid|qid|qds|hs|sos|prn|stat)\b|\b[01]-[01]-[01]\b|\btimes\s+(a|per)\s+day\b|\b(once|twice|thrice)\s+(a\s+day|daily)\b|\bevery\s+(morning|evening|night)\b)",
+      std::regex::icase);
+  std::vector<bool> rxLine(lines.size(), false);
+  std::set<int> medLines;
+  for (auto& [ln, off] : medSpans) medLines.insert(ln);
+  for (size_t li = 0; li < lines.size(); ++li) {
+    const std::string& sec = lineSection[li];
+    if (sec == "plan") rxLine[li] = true;
+    else if (sec.empty() || sec == "other")
+      rxLine[li] = medLines.count(static_cast<int>(li)) || std::regex_search(lineBody[li], rxCueRe) || std::regex_search(lineBody[li], rxDoseRe);
+  }
+  // Medicines that are not in the catalogue are still listed, exactly as written, so no line of
+  // the prescription is dropped. The doctor adds them as free-text items.
+  for (size_t li = 0; li < lines.size(); ++li) {
+    if (!rxLine[li] || medLines.count(static_cast<int>(li)) || lineBody[li].find_first_not_of(" \t\r") == std::string::npos) continue;
+    const std::string& line = lineBody[li];
+    static const std::set<std::string> verbs = {"apply", "take", "use", "start", "continue", "give", "tab", "tabs", "tablet", "tablets", "cap",
+                                                "caps", "capsule", "capsules", "inj", "injection", "syp", "syrup", "rx", "local", "application"};
+    static const std::set<std::string> stops = {"on", "over", "to", "for", "x", "every", "at", "in", "after", "before", "with", "daily", "once",
+                                                "twice", "thrice", "od", "bd", "bid", "tds", "tid", "qid", "qds", "hs", "sos", "prn", "stat",
+                                                "and", "or", "till", "until", "morning", "evening", "night", "a", "the", "times", "time", "per",
+                                                "then", "followed", "if", "when", "as", "thin", "layer", "affected", "area"};
+    static const std::map<std::string, std::string> forms = {
+        {"cream", "CREAM"}, {"gel", "GEL"}, {"oint", "OINTMENT"}, {"ointment", "OINTMENT"}, {"lotion", "LOTION"}, {"solution", "SOLUTION"},
+        {"soln", "SOLUTION"}, {"soap", "SOAP"}, {"shampoo", "SHAMPOO"}, {"syrup", "SYRUP"}, {"syp", "SYRUP"}, {"susp", "SUSPENSION"},
+        {"suspension", "SUSPENSION"}, {"tab", "TABLET"}, {"tabs", "TABLET"}, {"tablet", "TABLET"}, {"tablets", "TABLET"}, {"cap", "CAPSULE"},
+        {"caps", "CAPSULE"}, {"capsule", "CAPSULE"}, {"capsules", "CAPSULE"}, {"powder", "POWDER"}, {"spray", "SPRAY"}, {"drops", "DROPS"},
+        {"sachet", "SACHET"}, {"serum", "SERUM"}, {"sunscreen", "SUNSCREEN"}, {"facewash", "FACE WASH"}, {"wash", "FACE WASH"},
+        {"inj", "INJECTION"}, {"injection", "INJECTION"}, {"paint", "PAINT"}};
+    std::set<std::string> siteWords;
+    for (auto& e : lexicon())
+      if (e.words.size() == 1) siteWords.insert(e.words[0]);
+    std::vector<std::string> nameWords;
+    std::string form;
+    bool apply = false, oral = false, started = false;
+    std::regex wordRe(R"([A-Za-z][A-Za-z'\-]*|\d+(?:\.\d+)?\s*%|\d+(?:\.\d+)?|[,\-–:;()])");
+    for (auto it = std::sregex_iterator(line.begin(), line.end(), wordRe); it != std::sregex_iterator(); ++it) {
+      std::string raw = it->str();
+      std::string w = lower(raw);
+      if (w == "apply" || w == "application" || w == "local") apply = true;
+      if (w == "take" || w == "tab" || w == "tabs" || w == "tablet" || w == "tablets" || w == "cap" || w == "caps" || w == "capsule" ||
+          w == "capsules" || w == "syp" || w == "syrup" || w == "orally" || w == "oral")
+        oral = true;
+      auto f = forms.find(w);
+      if (f != forms.end() && form.empty()) form = f->second;
+      if (!started && verbs.count(w)) continue;
+      if (std::isdigit(static_cast<unsigned char>(w[0])) || std::strchr(",-–:;()", w[0]) || stops.count(w) || (started && siteWords.count(stem(w)))) {
+        if (started) break;
+        continue;
+      }
+      if (f != forms.end()) { if (started) break; continue; }
+      started = true;
+      if (nameWords.size() < 4) nameWords.push_back(raw);
+    }
+    if (nameWords.empty()) continue;
+    std::string name;
+    for (auto& w : nameWords) name += (name.empty() ? "" : " ") + w;
+    if (name.size() < 3 || commonWords().count(lower(name))) continue;
+    json m = {{"genericCode", nullptr}, {"name", titleCase(name)}, {"evidence", line}, {"fuzzy", false}, {"negated", false}, {"unmatched", true}};
+    if (!form.empty()) m["dosageForm"] = form;
+    bool topicalForm = form == "CREAM" || form == "GEL" || form == "OINTMENT" || form == "LOTION" || form == "SOAP" || form == "SHAMPOO" ||
+                       form == "POWDER" || form == "FACE WASH" || form == "SERUM" || form == "SUNSCREEN" || form == "PAINT";
+    if (apply || topicalForm) m["route"] = "TOPICAL";
+    else if (oral || form == "TABLET" || form == "CAPSULE" || form == "SYRUP" || form == "SUSPENSION" || form == "SACHET") m["route"] = "ORAL";
+    std::smatch sm;
+    if (std::regex_search(line, sm, strengthRe)) m["strength"] = sm.str(1) + " " + lower(sm.str(2));
+    for (auto& [re, label] : freqs)
+      if (std::regex_search(line, sm, re)) { m["frequency"] = label; break; }
+    if (std::regex_search(line, sm, medDurRe)) {
+      int v = 0, mult = 1;
+      if (sm[1].matched) {
+        v = std::stoi(sm.str(1));
+        char u = static_cast<char>(std::tolower(static_cast<unsigned char>(sm.str(2)[0])));
+        mult = u == 'w' ? 7 : u == 'm' ? 30 : 1;
+      } else {
+        v = std::stoi(sm.str(3));
+        mult = sm.str(4) == "52" ? 7 : sm.str(4) == "12" ? 30 : 1;
+      }
+      if (v > 0 && v * mult <= 365) m["durationDays"] = v * mult;
+    }
+    meds.push_back(m);
+  }
+  // Sections: prescription lines go to the plan. Without any headings, the first other line is the complaint.
+  {
+    bool complaintTaken = false;
+    for (size_t li = 0; li < lines.size(); ++li) {
+      const std::string& body = lineBody[li];
+      if (body.find_first_not_of(" \t\r") == std::string::npos) continue;
+      std::string sec = lineSection[li];
+      if (sec.empty() || sec == "other") {
+        if (rxLine[li]) sec = "plan";
+        else if (!anyHeading && !complaintTaken) { sec = "complaint"; complaintTaken = true; }
+        else sec = "other";
+      }
+      auto& sv = sections[sec];
+      sv += (sv.empty() ? "" : "\n") + body;
     }
   }
 
@@ -527,7 +633,7 @@ json extractClinicalText(const std::string& text, const std::vector<KnownMedicin
     if (cue) aggravationClauses.insert(toks[i].clause);
   }
   for (size_t i = 0; i < toks.size(); ++i) {
-    if (used[i]) continue;
+    if (used[i] || rxLine[static_cast<size_t>(toks[i].line)]) continue;
     const Entry* hit = nullptr;
     bool fuzzy = false;
     size_t len = 1;
@@ -582,7 +688,7 @@ json extractClinicalText(const std::string& text, const std::vector<KnownMedicin
       size_t pos = static_cast<size_t>(m.position(0));
       // skip durations that belong to a medicine on the same line
       size_t lineNo = static_cast<size_t>(std::count(text.begin(), text.begin() + static_cast<long>(pos), '\n'));
-      bool medicine = false;
+      bool medicine = lineNo < rxLine.size() && rxLine[lineNo];
       for (auto& [ln, off] : medSpans)
         if (static_cast<size_t>(ln) == lineNo && off < pos) medicine = true;
       if (medicine) continue;
@@ -691,7 +797,7 @@ json extractClinicalText(const std::string& text, const std::vector<KnownMedicin
   };
 
   json out = {{"sections", sections}, {"assessment", assessment}, {"negatives", negatives}, {"diagnoses", dx},
-              {"excludedDiagnoses", dxExcluded}, {"medicines", meds}, {"corrections", corrections}, {"engineVersion", "note-extract-1.0"}};
+              {"excludedDiagnoses", dxExcluded}, {"medicines", meds}, {"corrections", corrections}, {"engineVersion", "note-extract-1.1"}};
   json warnings = json::array();
   if (text.find_first_not_of(" \t\r\n") == std::string::npos) warnings.push_back("The note is empty.");
   if (!corrections.empty()) warnings.push_back("Some words were matched approximately. Check the suggested corrections.");

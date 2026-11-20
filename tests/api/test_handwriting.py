@@ -115,6 +115,21 @@ def test_access_control(receptionist, hwdoc, other_doctor):
     assert receptionist.get(f"{path}/pages/1/image").status_code == 403
 
 
+def test_prescription_lines_from_the_ipad_note(receptionist, hwdoc):
+    """Both lines of a written prescription are proposed; treatment details are not read as findings."""
+    c, _ = derm_visit(receptionist, hwdoc, finalize=False)
+    note = ". Benzoyl peroxide, two times a day for 15 days.\n\nApply betadine solution on face for 10 days every evening"
+    ex = hwdoc.post(f"/consultations/{c['id']}/handwriting/extract", {"text": note}).json()
+    meds = ex["medicines"]
+    assert [m["name"] for m in meds] == ["Benzoyl Peroxide", "Betadine"]
+    bp, bet = meds
+    assert bp["genericCode"] == "BENZOYL_PEROXIDE" and bp["products"] and bp["frequency"] == "Twice daily" and bp["durationDays"] == 15
+    assert bet["unmatched"] is True and bet["products"] == [] and bet["route"] == "TOPICAL" and bet["dosageForm"] == "SOLUTION"
+    assert bet["frequency"] == "Once daily, evening" and bet["durationDays"] == 10
+    assert ex["assessment"]["duration"] is None and ex["assessment"]["bodySites"] == []
+    assert "complaint" not in ex["sections"] and ex["sections"]["plan"].count("\n") == 1
+
+
 def test_analyse_without_provider_and_extract(receptionist, hwdoc):
     c, _ = derm_visit(receptionist, hwdoc, finalize=False)
     path = f"/consultations/{c['id']}/handwriting"

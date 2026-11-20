@@ -92,7 +92,7 @@ See [HANDWRITING.md](HANDWRITING.md). Page bodies may be up to 9 MB. `VERSION_CO
 | GET | `/consultations/{id}/handwriting/pages/{page}/image` | Rendered PNG of one page (view is audited) |
 | PUT | `/consultations/{id}/handwriting/pages/{page}` | Save one page: vector ink + rendered PNG (treating doctor, draft only) |
 | DELETE | `/consultations/{id}/handwriting/pages/{page}` | Remove a page (draft only) |
-| POST | `/consultations/{id}/handwriting/analyse` | Analyse handwriting: recognition (if configured) + proposed structured fields; creates a transcription awaiting review |
+| POST | `/consultations/{id}/handwriting/analyse` | Convert the pages: recognition (if configured) + proposed structured fields; creates a transcription awaiting the doctor's approval |
 | POST | `/consultations/{id}/handwriting/extract` | Propose structured fields from (corrected) note text; stores nothing |
 | POST | `/handwriting/transcriptions/{tid}/accept` | Doctor accepts the reviewed text and the fields applied to the consultation |
 | POST | `/handwriting/transcriptions/{tid}/discard` | Discard a transcription without applying it |

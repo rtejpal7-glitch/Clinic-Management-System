@@ -20,8 +20,8 @@ type SaveState = "idle" | "pending" | "saving" | "saved" | "error";
 type Action = { kind: "add"; stroke: Stroke } | { kind: "erase"; strokes: { stroke: Stroke; index: number }[] } | { kind: "clear"; strokes: Stroke[] };
 
 export const HandwritingPad = forwardRef<PadHandle, {
-  consultationId: string; initialPages: PadPage[]; onSaved?: (pages: PadPage[]) => void; onAnalyse: () => void; analysing?: boolean;
-}>(function HandwritingPad({ consultationId, initialPages, onSaved, onAnalyse, analysing }, ref) {
+  consultationId: string; initialPages: PadPage[]; onSaved?: (pages: PadPage[]) => void;
+}>(function HandwritingPad({ consultationId, initialPages, onSaved }, ref) {
   const toast = useToast();
   const wrapRef = useRef<HTMLDivElement>(null);
   const baseRef = useRef<HTMLCanvasElement>(null);
@@ -32,8 +32,8 @@ export const HandwritingPad = forwardRef<PadHandle, {
   const [pageNo, setPageNo] = useState(1);
   const [tool, setTool] = useState<"pen" | "eraser">("pen");
   const [colour, setColour] = useState(PEN_COLOURS[0].id);
-  const [size, setSize] = useState(PEN_SIZES[1].id);
-  const [pencilOnly, setPencilOnly] = useState(false);
+  const size = PEN_SIZES[1].id;  // width follows pen pressure
+  const [, setPencilOnly] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
@@ -334,12 +334,6 @@ export const HandwritingPad = forwardRef<PadHandle, {
               style={{ ["--sw" as string]: c.id }} onClick={() => { setColour(c.id); setTool("pen"); }} />
           ))}
         </div>
-        <div className="hw-group" role="group" aria-label="Thickness">
-          {PEN_SIZES.map((s) => (
-            <button type="button" key={s.id} className="hw-size" aria-pressed={size === s.id} aria-label={s.label} title={s.label}
-              onClick={() => { setSize(s.id); setTool("pen"); }}><span style={{ width: s.id * 3, height: s.id * 3 }} /></button>
-          ))}
-        </div>
         <div className="hw-group">
           <button type="button" className="hw-tool" onClick={applyUndo} disabled={!canUndo} aria-label="Undo">↶</button>
           <button type="button" className="hw-tool" onClick={applyRedo} disabled={!canRedo} aria-label="Redo">↷</button>
@@ -352,14 +346,8 @@ export const HandwritingPad = forwardRef<PadHandle, {
           <button type="button" className="hw-tool" onClick={addPage}>+ Page</button>
         </div>
         <span className={`hw-save small ${saveState}`} aria-live="polite">{saveLabel}</span>
-        <Button variant="primary" busy={analysing} onClick={async () => { if (await flush()) onAnalyse(); }}
-          disabled={!pages.some((p) => p.strokeCount > 0) && !strokes}>Analyse handwriting</Button>
       </div>
       {saveError && <Banner kind="error">{saveError} <button className="btn btn-sm" onClick={() => flush()}>Retry</button></Banner>}
-      <div className="hw-hint small muted">
-        {pencilOnly ? "Apple Pencil detected: your palm and fingers won't draw. Swipe with one finger to scroll."
-          : "Write with Apple Pencil or a stylus. A finger or mouse also works until a Pencil is used."}
-      </div>
       <div ref={wrapRef} className="hw-sheet" aria-label={`Handwriting page ${pageNo}`}>
         <canvas ref={baseRef} className="hw-canvas" aria-hidden="true" />
         <canvas ref={liveRef} className="hw-canvas hw-live" role="img" aria-label="Writing surface" />

@@ -33,7 +33,7 @@ All demo accounts use `Clinic-Demo-2026`: `dr.kavya` (dermatology, 3 patients wa
 2. On the PC, find its address: `ipconfig` → *IPv4 Address* (e.g. `192.168.1.20`).
 3. On the iPad, open Safari at `http://192.168.1.20:8080`. If it does not load, allow Docker Desktop through Windows Firewall for private networks.
 4. Sign in as `dr.kavya` (or any doctor), open an appointment, press **Start consultation**. The **Handwritten notes** tab opens on its own.
-5. Write, then **Analyse handwriting**. With no recognition provider configured (the default), type or Scribble the text in the box on the right; ClinicFlow proposes the fields for you to tick. See `docs/HANDWRITING.md`.
+5. Write on the page. In the **Text** section, write the same note with Apple Pencil (Scribble turns it into text) or type it; with a recognition service set up, it fills in by itself. Check the list under it and press **Add to consultation**. See `docs/HANDWRITING.md`.
 
 This is plain HTTP on your local network, for trying it out only. Use HTTPS for anything beyond a demo (`docs/DEPLOY_VERCEL.md`).
 

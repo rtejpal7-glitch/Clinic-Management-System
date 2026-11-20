@@ -191,16 +191,28 @@ json HandwritingService::extractFor(Conn& c, const std::string& text) const {
       .each([&](const Row& r) { meds.push_back({r.str("generic_code"), r.str("generic_name")}); });
   json ex = derm::extractClinicalText(text, meds);
   // Attach catalogue products to each mentioned medicine so the doctor can add it to the draft.
+  // Medicines written by a name the catalogue lists only as a brand are matched by that brand.
   for (auto& m : ex["medicines"]) {
     json products = json::array();
-    c.exec("SELECT id, generic_name, brand_name, strength, dosage_form, default_route FROM medication_catalogue "
-           "WHERE generic_code = $1 AND is_active ORDER BY (brand_name IS NULL) DESC, strength LIMIT 6",
-           Params(m["genericCode"].get<std::string>()))
-        .each([&](const Row& r) {
-          products.push_back({{"medicationId", r.str("id")}, {"genericName", r.str("generic_name")},
-                              {"brandName", r.isNull("brand_name") ? json(nullptr) : json(r.str("brand_name"))},
-                              {"strength", r.str("strength")}, {"dosageForm", r.str("dosage_form")}, {"route", r.str("default_route")}});
-        });
+    auto add = [&](const Row& r) {
+      products.push_back({{"medicationId", r.str("id")}, {"genericName", r.str("generic_name")},
+                          {"brandName", r.isNull("brand_name") ? json(nullptr) : json(r.str("brand_name"))},
+                          {"strength", r.str("strength")}, {"dosageForm", r.str("dosage_form")}, {"route", r.str("default_route")}});
+    };
+    if (m["genericCode"].is_string()) {
+      c.exec("SELECT id, generic_name, brand_name, strength, dosage_form, default_route FROM medication_catalogue "
+             "WHERE generic_code = $1 AND is_active ORDER BY (brand_name IS NULL) DESC, strength LIMIT 6",
+             Params(m["genericCode"].get<std::string>()))
+          .each(add);
+    } else {
+      c.exec("SELECT id, generic_name, brand_name, strength, dosage_form, default_route, generic_code FROM medication_catalogue "
+             "WHERE is_active AND (lower(brand_name) = lower($1) OR lower(generic_name) = lower($1)) ORDER BY strength LIMIT 6",
+             Params(m["name"].get<std::string>()))
+          .each([&](const Row& r) {
+            add(r);
+            if (!r.isNull("generic_code")) { m["genericCode"] = r.str("generic_code"); m["unmatched"] = false; }
+          });
+    }
     m["products"] = products;
   }
   return ex;

@@ -86,7 +86,6 @@ await test("Pencil writing, palm rejection, eraser, undo and autosave", async ()
   await penStroke(word(0.08, 0.06));
   await penStroke(word(0.36, 0.06));
   await penStroke(word(0.08, 0.10));
-  await page.getByText("Apple Pencil detected").waitFor();
   const inked = await page.evaluate(() => document.querySelector(".hw-canvas").toDataURL());
   assert.notEqual(blank, inked, "ink is drawn on the page");
   // palm/finger touch after the Pencil was used must not draw
@@ -114,59 +113,90 @@ await test("second page and clear page", async () => {
 });
 
 let consultationId;
-await test("Analyse handwriting: side-by-side review, corrections, proposed fields", async () => {
+const rxRow = (list, name) => list.locator(".hw-row", { has: page.locator(".hw-kind", { hasText: /^Rx$/ }) }).filter({ hasText: name });
+const NOTE = "C/o itchy raised wheals on arms and back x 5/7\nNo fever. No lip swelling\nO/E erythematus wheals, generalised\nImp: ?urticaria\n" +
+  "Rx fexofenadine 120mg OD x 2 weeks\nApply betadine solution on face every evening for 10 days";
+await test("one screen: the text sits beside the writing, with what will be added", async () => {
   consultationId = page.url().split("/consultations/")[1];
-  await page.getByRole("button", { name: "Analyse handwriting" }).click();
-  await page.getByText("Review handwritten notes").waitFor();
-  await page.locator(".hw-images img").first().waitFor();
-  // Recognition is not configured in this environment: the doctor enters the text (as with iPad Scribble)
-  await page.getByLabel("Note text").fill("C/o itchy raised wheals on arms and back x 5/7\nNo fever. No lip swelling\nO/E erythematus wheals, generalised\nImp: ?urticaria\nRx fexofenadine 120mg OD x 2 weeks");
-  await page.getByText("Possible misread words").waitFor();
+  await page.getByRole("heading", { name: "Write", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Text", exact: true }).waitFor();
+  // Recognition is not configured in this environment: the doctor writes the text with Scribble (filled here)
+  await page.getByText("Automatic conversion of the page is not switched on").waitFor();
+  await page.getByLabel("Note text").fill(NOTE);
   await page.getByRole("button", { name: /erythematus → erythematous/ }).click();
   assert.match(await page.getByLabel("Note text").inputValue(), /erythematous wheals/);
-  await page.locator(".hw-check", { hasText: "erythematus" }).waitFor({ state: "detached" });  // proposals refreshed
-  await page.getByText("Proposed consultation fields").waitFor();
-  await page.locator(".hw-check", { hasText: "Wheal" }).first().waitFor();
-  assert.equal(await page.locator(".hw-check", { hasText: "L50.9" }).locator("input").isChecked(), false, "diagnosis needs an explicit tick");
-  await page.locator(".hw-check", { hasText: "L50.9" }).locator("input").check();
-  await page.locator(".hw-med .hw-check input").first().check();
-  await page.getByText("Recorded as absent").waitFor();
-  await shot("41-handwriting-review", false);
+  const list = page.getByLabel("Will be added to the consultation");
+  await rxRow(list, "Fexofenadine").waitFor();
+  // both prescription lines are listed; the one not in the catalogue is added as written
+  await rxRow(list, "Betadine").getByText("not in catalogue").waitFor();
+  assert.ok(await rxRow(list, "Betadine").getByText("Once daily, evening · 10 days").count());
+  // exact matches are ticked; the doctor can leave anything out
+  assert.equal(await list.locator(".hw-row", { hasText: "L50.9" }).locator("input").isChecked(), true);
+  assert.equal(await rxRow(list, "Fexofenadine").locator("input").isChecked(), true);
+  await list.getByRole("button", { name: "Wheal (hive)" }).waitFor();
+  const back = list.getByRole("button", { name: "Back", exact: true });
+  assert.equal(await back.getAttribute("aria-pressed"), "true");
+  await back.click();
+  assert.equal(await back.getAttribute("aria-pressed"), "false");
+  // treatment details are not read as findings: no "Face" area, and the complaint lasted 5 days, not 10
+  assert.equal(await list.getByRole("button", { name: "Face", exact: true }).count(), 0);
+  await list.getByRole("button", { name: "5 days", exact: true }).waitFor();
+  await page.getByText("Written as absent").waitFor();
+  await shot("41-handwriting-two-sections", false);
 });
 
-await test("Accept applies the approved fields to the consultation", async () => {
-  await page.getByRole("button", { name: /Accept and add to consultation/ }).click();
-  await page.getByText("The approved information was added to the consultation").waitFor();
-  await page.getByText("Doctor-approved transcription").waitFor();
+await test("Add to consultation fills notes, assessment, diagnosis and the draft prescription", async () => {
+  await page.getByRole("button", { name: /^Add to consultation/ }).click();
+  await page.getByText(/Added to the consultation at/).waitFor();
   await page.getByRole("tab", { name: "Notes, vitals & diagnosis" }).click();
   assert.match(await page.getByLabel("Chief complaint").inputValue(), /itchy raised wheals/);
+  assert.match(await page.getByLabel("Treatment plan").inputValue(), /betadine solution on face/);
   await page.getByText("L50.9").first().waitFor();
   await page.getByRole("tab", { name: "Dermatology assessment" }).click();
   await page.getByRole("group", { name: "Lesion type" }).getByRole("button", { name: "Wheal (hive)", exact: true }).and(page.locator('[aria-pressed="true"]')).waitFor();
-  await page.getByRole("tab", { name: /Prescription & orders/ }).click();
+  assert.equal(await page.getByRole("group", { name: "Body location" }).getByRole("button", { name: "Back", exact: true }).getAttribute("aria-pressed"), "false", "left out by the doctor");
+  await page.getByRole("tab", { name: /Prescription & orders \(2\)/ }).click();
   await page.locator("h3", { hasText: "Medicines" }).waitFor();
+  await page.getByText("Betadine", { exact: true }).waitFor();
   const values = await page.evaluate(() => Array.from(document.querySelectorAll("input")).map((i) => i.value));
-  assert.ok(values.some((v) => v.includes("From handwritten notes")), "medicine added to the draft with a check-dose note");
+  assert.ok(values.some((v) => v.startsWith('Handwritten: "fexofenadine 120mg OD')), "medicine added to the draft with the written line");
   assert.ok(values.includes("Once daily") && values.includes("14"), "frequency and duration taken from the note");
+  assert.ok(values.includes("Once daily, evening") && values.includes("10"), "the second line too");
   await shot("42-handwriting-applied-rx", false);
+});
+
+await test("adding again after more writing adds only what is new", async () => {
+  await page.getByRole("tab", { name: "Handwritten notes" }).click();
+  await page.getByText(/Added to the consultation at/).waitFor();
+  await page.getByLabel("Note text").fill(NOTE.replace("erythematus", "erythematous") + "\nTab cetirizine 10 mg at night x 5 days");
+  await rxRow(page.getByLabel("Will be added to the consultation"), "Cetirizine").waitFor();
+  await page.getByRole("button", { name: /Add changes to consultation/ }).click();
+  await page.getByText(/Added to the consultation at/).waitFor();
+  await page.getByRole("tab", { name: /Prescription & orders \(3\)/ }).click();
+  await page.getByText("Betadine", { exact: true }).waitFor();
+  const plan = await page.evaluate(() => Array.from(document.querySelectorAll("input")).filter((i) => i.value.startsWith("Handwritten:")).length);
+  assert.equal(plan, 3, "three medicines, none repeated");
+  await page.getByRole("tab", { name: "Notes, vitals & diagnosis" }).click();
+  const tp = await page.getByLabel("Treatment plan").inputValue();
+  assert.equal(tp.match(/betadine/g)?.length, 1, "plan lines are not repeated");
+  assert.match(tp, /cetirizine/);
 });
 
 await test("decision support runs on the approved information", async () => {
   await page.getByRole("tab", { name: "Handwritten notes" }).click();
-  await page.getByRole("button", { name: /Open decision support/ }).click();
+  await page.getByRole("button", { name: "Decision support" }).click();
   await page.getByRole("region", { name: "Clinical knowledge" }).getByText(/Urticaria|No approved clinical content/).first().waitFor();
   await shot("43-handwriting-to-decision-support", false);
 });
 
-await test("finalized: handwriting is read-only and kept with the record", async () => {
+await test("finalized: handwriting and approved text are read-only and kept with the record", async () => {
   await page.getByRole("button", { name: "Finalize", exact: true }).click();
   await page.getByRole("button", { name: "Finalize and lock" }).click();
   await page.getByText(/This record is locked/).waitFor();
   await page.getByRole("tab", { name: "Handwritten notes" }).click();
-  await page.getByText("Original handwriting").waitFor();
   await page.locator(".hw-images img").first().waitFor();
   assert.equal(await page.locator(".hw-live").count(), 0, "no writing surface on a finalized record");
-  await page.getByText("Doctor-approved transcription").waitFor();
+  await page.locator(".hw-text-record", { hasText: "cetirizine" }).waitFor();
   await shot("44-handwriting-record", false);
 });
 

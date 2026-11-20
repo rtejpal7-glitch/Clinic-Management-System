@@ -129,16 +129,23 @@ export function ConsultationPage({ id }: { id: string }) {
   // dermatology assessment. Nothing is finalized.
   const applyHandwriting = async (f: AcceptedFields): Promise<boolean> => {
     const next: Consultation = { ...c, diagnoses: [...c.diagnoses], prescription: { ...c.prescription, items: [...c.prescription.items] } };
+    // Notes: add only the lines that are not there yet, so adding again after more writing does not repeat text.
     for (const [k, v] of Object.entries(f.notes) as [keyof AcceptedFields["notes"], string][]) {
-      const existing = (next[k] as string | undefined)?.trim();
-      next[k] = !existing ? v : existing.includes(v) ? existing : `${existing}\n${v}`;
+      const existing = (next[k] as string | undefined)?.trim() ?? "";
+      const have = new Set(existing.split("\n").map((l) => l.trim().toLowerCase()));
+      const add = v.split("\n").map((l) => l.trim()).filter((l) => l && !have.has(l.toLowerCase()));
+      if (add.length) next[k] = [existing, ...add].filter(Boolean).join("\n");
     }
     for (const dx of f.diagnoses)
       if (!next.diagnoses.some((x) => x.code === dx.code)) next.diagnoses.push({ codeSystem: "ICD-10", code: dx.code, display: dx.display, diagnosisType: "PROVISIONAL" });
-    for (const m of f.medicines)
-      next.prescription.items.push({ medicationId: m.medicationId, medicineName: m.medicineName, strength: m.strength, dosageForm: m.dosageForm, route: m.route,
-        dose: defaultDose(m.dosageForm), frequency: m.frequency ?? "", durationDays: m.durationDays ?? null, sourceKind: "MANUAL",
-        instructions: "From handwritten notes - check dose" });
+    for (const m of f.medicines) {
+      const same = next.prescription.items.some((i) => (m.medicationId ? i.medicationId === m.medicationId : !i.medicationId && i.medicineName.toLowerCase() === m.medicineName.toLowerCase()));
+      if (same) continue;
+      const written = m.writtenAs.length > 120 ? `${m.writtenAs.slice(0, 117)}...` : m.writtenAs;
+      next.prescription.items.push({ medicationId: m.medicationId ?? undefined, medicineName: m.medicineName, strength: m.strength, dosageForm: m.dosageForm,
+        route: m.route ?? "", dose: defaultDose(m.dosageForm ?? "") || "As directed", frequency: m.frequency || "As directed", durationDays: m.durationDays ?? null,
+        sourceKind: "MANUAL", instructions: `Handwritten: "${written}" - check dose` });
+    }
     const saved = await save(true, next);
     if (!saved) return false;
     if (Object.keys(f.assessment).length) {

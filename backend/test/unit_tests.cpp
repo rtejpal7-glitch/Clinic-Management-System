@@ -520,6 +520,55 @@ TEST(extract_medicine_frequency_in_words) {
   CHECK(m[2]["durationDays"] == 42);
 }
 
+
+TEST(extract_prescription_lines_are_not_findings_and_none_are_dropped) {
+  std::vector<cf::derm::KnownMedicine> meds = {{"BENZOYL_PEROXIDE", "Benzoyl Peroxide"}};
+  // The note from the iPad test: two prescription lines, the second not in the catalogue.
+  auto r = cf::derm::extractClinicalText(". Benzoyl peroxide, two times a day for 15 days.\n\nApply betadine solution on face for 10 days every evening", meds, {});
+  auto& m = r["medicines"];
+  CHECK(m.size() == 2);
+  CHECK(m[0]["name"] == "Benzoyl Peroxide");
+  CHECK(m[0]["frequency"] == "Twice daily");
+  CHECK(m[0]["durationDays"] == 15);
+  CHECK(m[1]["name"] == "Betadine");
+  CHECK(m[1]["unmatched"] == true);
+  CHECK(m[1]["genericCode"].is_null());
+  CHECK(m[1]["dosageForm"] == "SOLUTION");
+  CHECK(m[1]["route"] == "TOPICAL");
+  CHECK(m[1]["frequency"] == "Once daily, evening");
+  CHECK(m[1]["durationDays"] == 10);
+  // treatment duration and application site are not the complaint's duration or affected area
+  CHECK(r["assessment"]["duration"].is_null());
+  CHECK(r["assessment"]["bodySites"].empty());
+  CHECK(!r["sections"].contains("complaint"));
+  CHECK(r["sections"]["plan"].get<std::string>().find("Apply betadine") != std::string::npos);
+  CHECK(r["sections"]["plan"].get<std::string>().rfind("Benzoyl", 0) == 0);  // bullet stripped
+}
+
+TEST(extract_mixed_note_without_headings) {
+  std::vector<cf::derm::KnownMedicine> meds = {{"CETIRIZINE", "Cetirizine"}};
+  auto r = cf::derm::extractClinicalText(
+      "itchy red patches on both arms x 2 weeks\n1. Tab cetirizine 10 mg at night x 5 days\n2. Calamine lotion apply twice daily\n3. Tab Montair LC 1-0-1", meds, {});
+  CHECK(r["sections"]["complaint"] == "itchy red patches on both arms x 2 weeks");
+  CHECK(r["assessment"]["duration"]["value"] == 2);
+  CHECK(r["assessment"]["duration"]["unit"] == "WEEKS");
+  bool arm = false;
+  for (auto& x : r["assessment"]["bodySites"]) arm = arm || x["evidence"] == "arms";
+  CHECK(arm);
+  auto& m = r["medicines"];
+  CHECK(m.size() == 3);
+  CHECK(m[0]["name"] == "Cetirizine");
+  CHECK(m[0]["frequency"] == "At night");
+  CHECK(m[0]["strength"] == "10 mg");
+  CHECK(m[1]["name"] == "Calamine");
+  CHECK(m[1]["dosageForm"] == "LOTION");
+  CHECK(m[1]["route"] == "TOPICAL");
+  CHECK(m[1]["frequency"] == "Twice daily");
+  CHECK(m[2]["name"] == "Montair LC");
+  CHECK(m[2]["route"] == "ORAL");
+  CHECK(m[2]["frequency"] == "Twice daily (1-0-1)");
+}
+
 int main() {
   for (auto& [name, fn] : registry()) {
     try {
